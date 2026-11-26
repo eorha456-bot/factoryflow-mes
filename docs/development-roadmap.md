@@ -9,8 +9,8 @@
 - [x] `.gitignore` 보안 설정 및 민감 정보 보호
 - [x] `application.properties` / `application-local.properties` 프로필 분리
 - [x] `AGENTS.md` 및 `docs/` 기본 문서 작성
-- [ ] MySQL `factoryflow` 데이터베이스 및 전용 계정 생성 (사용자 승인 후 실행)
-- [ ] 환경변수(`DB_USERNAME`, `DB_PASSWORD`) 등록 및 서버/테스트 정상 기동 확인
+- [x] MySQL `factoryflow` 데이터베이스 및 전용 계정 생성 (사용자 승인 후 실행)
+- [x] 환경변수(`DB_USERNAME`, `DB_PASSWORD`) 등록 및 서버/테스트 정상 기동 확인
 
 ---
 
