@@ -35,3 +35,14 @@ out/
 
 ### VS Code ###
 .vscode/
+
+### FactoryFlow - Local Config & Logs ###
+application-local.properties
+*.log
+
+### Frontend (React / Vite) & Env ###
+node_modules/
+frontend/dist/
+.env
+.env.*
+!.env.example
