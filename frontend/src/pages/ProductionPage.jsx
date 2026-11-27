@@ -6,13 +6,27 @@ import EmptyState from '../components/ui/EmptyState';
 import { IconAlert, IconCheckCircle, IconRefresh } from '../components/ui/Icons';
 import SearchSortBar from '../components/ui/SearchSortBar';
 import { useToast } from '../context/ToastContext';
-import { formatDateTime, formatNumber, getTodayIso, notifyDataChanged } from '../utils/format';
+import {
+  formatDateTime,
+  formatNumber,
+  getDaysAgoIso,
+  getTodayIso,
+  notifyDataChanged,
+  toLocalDateKey,
+} from '../utils/format';
 
 const SORT_OPTIONS = [
   { value: 'latest', label: '정렬: 최신 등록순' },
   { value: 'plannedAsc', label: '정렬: 작업 예정일순' },
   { value: 'progressAsc', label: '정렬: 진행률 낮은순' },
   { value: 'progressDesc', label: '정렬: 진행률 높은순' },
+];
+
+const RESULT_SORT_OPTIONS = [
+  { value: 'latest', label: '정렬: 최신 등록순' },
+  { value: 'goodDesc', label: '정렬: 양품 많은순' },
+  { value: 'defectDesc', label: '정렬: 불량 많은순' },
+  { value: 'totalDesc', label: '정렬: 총 생산량순' },
 ];
 
 export default function ProductionPage() {
@@ -23,6 +37,13 @@ export default function ProductionPage() {
   const [filterStatus, setFilterStatus] = useState('');
   const [search, setSearch] = useState('');
   const [sortBy, setSortBy] = useState('latest');
+
+  const [resultPeriod, setResultPeriod] = useState('all');
+  const [resultCustomDate, setResultCustomDate] = useState(getTodayIso());
+  const [resultSearch, setResultSearch] = useState('');
+  const [resultSortBy, setResultSortBy] = useState('latest');
+  const [groupByDate, setGroupByDate] = useState(true);
+  const [collapsedDates, setCollapsedDates] = useState({});
 
   const [orderForm, setOrderForm] = useState({
     orderNumber: '',
@@ -154,6 +175,88 @@ export default function ProductionPage() {
     }
     return list;
   }, [workOrders, search, sortBy]);
+
+  const filteredResults = useMemo(() => {
+    const todayIso = getTodayIso();
+    const weekAgoIso = getDaysAgoIso(6);
+    const keyword = resultSearch.trim().toLowerCase();
+
+    const list = results.filter((r) => {
+      const dateKey = toLocalDateKey(r.createdAt);
+      if (resultPeriod === 'today' && dateKey !== todayIso) return false;
+      if (resultPeriod === 'week' && (dateKey < weekAgoIso || dateKey > todayIso)) return false;
+      if (resultPeriod === 'custom' && resultCustomDate && dateKey !== resultCustomDate) return false;
+
+      if (!keyword) return true;
+      return (
+        (r.orderNumber && r.orderNumber.toLowerCase().includes(keyword)) ||
+        (r.itemCode && r.itemCode.toLowerCase().includes(keyword)) ||
+        (r.itemName && r.itemName.toLowerCase().includes(keyword)) ||
+        (r.workerName && r.workerName.toLowerCase().includes(keyword)) ||
+        (r.remark && r.remark.toLowerCase().includes(keyword))
+      );
+    });
+
+    const sorted = [...list];
+    switch (resultSortBy) {
+      case 'goodDesc':
+        sorted.sort((a, b) => b.goodQuantity - a.goodQuantity);
+        break;
+      case 'defectDesc':
+        sorted.sort((a, b) => b.defectQuantity - a.defectQuantity);
+        break;
+      case 'totalDesc':
+        sorted.sort((a, b) => b.totalQuantity - a.totalQuantity);
+        break;
+      default:
+        break;
+    }
+    return sorted;
+  }, [results, resultPeriod, resultCustomDate, resultSearch, resultSortBy]);
+
+  const groupedResults = useMemo(() => {
+    const groups = new Map();
+    filteredResults.forEach((r) => {
+      const dateKey = toLocalDateKey(r.createdAt);
+      if (!groups.has(dateKey)) {
+        groups.set(dateKey, {
+          dateKey,
+          items: [],
+          goodSum: 0,
+          defectSum: 0,
+          totalSum: 0,
+        });
+      }
+      const group = groups.get(dateKey);
+      group.items.push(r);
+      group.goodSum += r.goodQuantity;
+      group.defectSum += r.defectQuantity;
+      group.totalSum += r.totalQuantity;
+    });
+
+    return Array.from(groups.values())
+      .sort((a, b) => b.dateKey.localeCompare(a.dateKey))
+      .map((g) => ({
+        ...g,
+        defectRate: g.totalSum > 0 ? Math.round((g.defectSum * 1000) / g.totalSum) / 10 : 0.0,
+      }));
+  }, [filteredResults]);
+
+  const resultSummary = useMemo(() => {
+    let goodSum = 0;
+    let defectSum = 0;
+    filteredResults.forEach((r) => {
+      goodSum += r.goodQuantity;
+      defectSum += r.defectQuantity;
+    });
+    const totalSum = goodSum + defectSum;
+    const defectRate = totalSum > 0 ? Math.round((defectSum * 1000) / totalSum) / 10 : 0.0;
+    return { count: filteredResults.length, goodSum, defectSum, totalSum, defectRate };
+  }, [filteredResults]);
+
+  function toggleDateGroup(dateKey) {
+    setCollapsedDates((prev) => ({ ...prev, [dateKey]: !prev[dateKey] }));
+  }
 
   const goodInput = Math.max(0, Number(resultForm.goodQuantity) || 0);
   const defectInput = Math.max(0, Number(resultForm.defectQuantity) || 0);
@@ -684,11 +787,111 @@ export default function ProductionPage() {
 
       <div className="card">
         <div className="card-header">
-          <h3 className="card-title">최근 생산실적 이력 ({results.length}건)</h3>
+          <h3 className="card-title">
+            생산실적 이력 ({filteredResults.length}
+            {filteredResults.length !== results.length ? ` / 전체 ${results.length}` : ''}건)
+          </h3>
+
+          <SearchSortBar
+            search={resultSearch}
+            onSearchChange={setResultSearch}
+            searchPlaceholder="지시번호·품목·작업자·비고 검색"
+            sortValue={resultSortBy}
+            onSortChange={setResultSortBy}
+            sortOptions={RESULT_SORT_OPTIONS}
+          >
+            <label className="checkbox-label">
+              <input
+                type="checkbox"
+                checked={groupByDate}
+                onChange={(e) => setGroupByDate(e.target.checked)}
+              />
+              날짜별 분류 보기
+            </label>
+          </SearchSortBar>
         </div>
 
-        {results.length === 0 ? (
-          <EmptyState message="등록된 생산실적이 없습니다." />
+        <div className="result-toolbar">
+          <div className="filter-bar">
+            <div className="tabs" style={{ marginBottom: 0 }}>
+              <button
+                type="button"
+                className={`tab-btn ${resultPeriod === 'all' ? 'active' : ''}`}
+                onClick={() => setResultPeriod('all')}
+              >
+                전체 기간
+              </button>
+              <button
+                type="button"
+                className={`tab-btn ${resultPeriod === 'today' ? 'active' : ''}`}
+                onClick={() => setResultPeriod('today')}
+              >
+                오늘
+              </button>
+              <button
+                type="button"
+                className={`tab-btn ${resultPeriod === 'week' ? 'active' : ''}`}
+                onClick={() => setResultPeriod('week')}
+              >
+                최근 7일
+              </button>
+              <button
+                type="button"
+                className={`tab-btn ${resultPeriod === 'custom' ? 'active' : ''}`}
+                onClick={() => setResultPeriod('custom')}
+              >
+                날짜 지정
+              </button>
+            </div>
+
+            {resultPeriod === 'custom' && (
+              <input
+                type="date"
+                aria-label="조회할 생산실적 날짜"
+                value={resultCustomDate}
+                onChange={(e) => setResultCustomDate(e.target.value)}
+              />
+            )}
+          </div>
+
+          {filteredResults.length > 0 && (
+            <div className="result-summary-strip">
+              <span className="result-summary-item">
+                조회 실적 <strong>{formatNumber(resultSummary.count)}건</strong>
+              </span>
+              <span className="result-summary-item">
+                총 생산량 <strong>{formatNumber(resultSummary.totalSum)}</strong>
+              </span>
+              <span className="result-summary-item">
+                양품{' '}
+                <strong style={{ color: '#15803d' }}>
+                  {formatNumber(resultSummary.goodSum)}
+                </strong>
+              </span>
+              <span className="result-summary-item">
+                불량{' '}
+                <strong style={{ color: resultSummary.defectSum > 0 ? '#b91c1c' : '#475569' }}>
+                  {formatNumber(resultSummary.defectSum)}
+                </strong>
+              </span>
+              <span className="result-summary-item">
+                불량률{' '}
+                <StatusBadge variant={resultSummary.defectRate >= 5 ? 'danger' : 'success'}>
+                  {resultSummary.defectRate.toFixed(1)}%
+                </StatusBadge>
+              </span>
+            </div>
+          )}
+        </div>
+
+        {filteredResults.length === 0 ? (
+          <EmptyState
+            message={
+              results.length === 0
+                ? '등록된 생산실적이 없습니다.'
+                : '선택한 날짜 또는 검색 조건에 해당하는 생산실적이 없습니다.'
+            }
+          />
         ) : (
           <div className="table-wrap">
             <table>
@@ -704,29 +907,92 @@ export default function ProductionPage() {
                   <th>비고</th>
                 </tr>
               </thead>
-              <tbody>
-                {results.map((r) => (
-                  <tr key={r.id}>
-                    <td>{formatDateTime(r.createdAt)}</td>
-                    <td style={{ fontWeight: 700 }}>{r.orderNumber}</td>
-                    <td>
-                      [{r.itemCode}] {r.itemName}
-                    </td>
-                    <td className="text-right" style={{ fontWeight: 800, color: '#15803d' }}>
-                      {formatNumber(r.goodQuantity)} {r.unit}
-                    </td>
-                    <td
-                      className="text-right"
-                      style={{ color: r.defectQuantity > 0 ? '#b91c1c' : '#64748b' }}
-                    >
-                      {formatNumber(r.defectQuantity)}
-                    </td>
-                    <td className="text-right">{formatNumber(r.totalQuantity)}</td>
-                    <td>{r.workerName || '-'}</td>
-                    <td>{r.remark || '-'}</td>
-                  </tr>
-                ))}
-              </tbody>
+              {groupByDate ? (
+                groupedResults.map((group) => {
+                  const isCollapsed = Boolean(collapsedDates[group.dateKey]);
+                  return (
+                    <tbody key={group.dateKey}>
+                      <tr
+                        className="date-group-row"
+                        onClick={() => toggleDateGroup(group.dateKey)}
+                        title="클릭하여 해당 날짜 실적 접기/펼치기"
+                      >
+                        <td colSpan={8}>
+                          <div className="date-group-header">
+                            <span className="date-group-title">
+                              <span>{isCollapsed ? '▸' : '▾'}</span>
+                              <span>{group.dateKey}</span>
+                              <StatusBadge variant="info">{group.items.length}건</StatusBadge>
+                            </span>
+                            <span className="date-group-metrics">
+                              <span style={{ color: '#15803d' }}>
+                                양품 {formatNumber(group.goodSum)}
+                              </span>
+                              <span
+                                style={{
+                                  color: group.defectSum > 0 ? '#b91c1c' : '#475569',
+                                }}
+                              >
+                                불량 {formatNumber(group.defectSum)}
+                              </span>
+                              <span>합계 {formatNumber(group.totalSum)}</span>
+                              <StatusBadge variant={group.defectRate >= 5 ? 'danger' : 'neutral'}>
+                                불량률 {group.defectRate.toFixed(1)}%
+                              </StatusBadge>
+                            </span>
+                          </div>
+                        </td>
+                      </tr>
+                      {!isCollapsed &&
+                        group.items.map((r) => (
+                          <tr key={r.id}>
+                            <td>{formatDateTime(r.createdAt)}</td>
+                            <td style={{ fontWeight: 700 }}>{r.orderNumber}</td>
+                            <td>
+                              [{r.itemCode}] {r.itemName}
+                            </td>
+                            <td className="text-right" style={{ fontWeight: 800, color: '#15803d' }}>
+                              {formatNumber(r.goodQuantity)} {r.unit}
+                            </td>
+                            <td
+                              className="text-right"
+                              style={{ color: r.defectQuantity > 0 ? '#b91c1c' : '#64748b' }}
+                            >
+                              {formatNumber(r.defectQuantity)}
+                            </td>
+                            <td className="text-right">{formatNumber(r.totalQuantity)}</td>
+                            <td>{r.workerName || '-'}</td>
+                            <td>{r.remark || '-'}</td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  );
+                })
+              ) : (
+                <tbody>
+                  {filteredResults.map((r) => (
+                    <tr key={r.id}>
+                      <td>{formatDateTime(r.createdAt)}</td>
+                      <td style={{ fontWeight: 700 }}>{r.orderNumber}</td>
+                      <td>
+                        [{r.itemCode}] {r.itemName}
+                      </td>
+                      <td className="text-right" style={{ fontWeight: 800, color: '#15803d' }}>
+                        {formatNumber(r.goodQuantity)} {r.unit}
+                      </td>
+                      <td
+                        className="text-right"
+                        style={{ color: r.defectQuantity > 0 ? '#b91c1c' : '#64748b' }}
+                      >
+                        {formatNumber(r.defectQuantity)}
+                      </td>
+                      <td className="text-right">{formatNumber(r.totalQuantity)}</td>
+                      <td>{r.workerName || '-'}</td>
+                      <td>{r.remark || '-'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              )}
             </table>
           </div>
         )}

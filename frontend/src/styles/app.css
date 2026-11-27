@@ -927,6 +927,70 @@ tr.row-inactive {
   color: var(--text-muted);
 }
 
+/* Date Category & Result Summary */
+.result-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.result-summary-strip {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: #f8fafc;
+  border: 1px solid var(--border);
+  font-size: 13.5px;
+}
+
+.result-summary-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.date-group-row td {
+  background: #eff6ff;
+  border-top: 2px solid #bfdbfe;
+  border-bottom: 1px solid #bfdbfe;
+  padding: 10px 14px;
+  cursor: pointer;
+}
+
+.date-group-row:hover td {
+  background: #dbeafe;
+}
+
+.date-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.date-group-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 800;
+  color: #1e3a8a;
+}
+
+.date-group-metrics {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  flex-wrap: wrap;
+}
+
 @media (max-width: 900px) {
   .app-shell {
     flex-direction: column;
