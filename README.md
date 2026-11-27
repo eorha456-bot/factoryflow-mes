@@ -247,7 +247,7 @@ npm run dev
 Get-Content docs/sample-data.sql -Raw -Encoding UTF8 | mysql -u factoryflow_user -p --default-character-set=utf8mb4 factoryflow
 ```
 
-> 적재 후 `http://localhost:5173`에 접속하면 **안전재고 미만 경고 2건, 일시정지 작업지시 1건, 금일/어제/그제 생산실적 이력, BOM 연동 데이터**를 즉시 확인할 수 있습니다.
+> 적재 후 `http://localhost:5173`에 접속하면 **안전재고 미만 경고 3건, 일시정지 작업지시 2건, 5대 상태 작업지시 8건, 4개 날짜 분산 생산실적 10건, 5대 유형 수불 이력 12건, 다중 BOM 9건**을 즉시 확인할 수 있습니다.
 
 ---
 
