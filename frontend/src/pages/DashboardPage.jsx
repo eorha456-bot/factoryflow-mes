@@ -7,12 +7,13 @@ import {
   IconAlert,
   IconCheckCircle,
   IconClipboard,
+  IconPause,
   IconRefresh,
   IconWarehouse,
 } from '../components/ui/Icons';
 import KpiCard from '../components/ui/KpiCard';
 import { useToast } from '../context/ToastContext';
-import { formatNumber, formatTimeOnly, getTodayIso } from '../utils/format';
+import { formatDateTime, formatNumber, formatTimeOnly, getTodayIso } from '../utils/format';
 
 export default function DashboardPage() {
   const toast = useToast();
@@ -50,9 +51,18 @@ export default function DashboardPage() {
     return () => window.clearInterval(timer);
   }, [autoRefresh, selectedDate, loadSummary]);
 
+  const pausedList = summary?.pausedWorkOrders || [];
+  const inProgressList = summary?.inProgressWorkOrders || [];
+  const activeOrders = [...pausedList, ...inProgressList];
   const hasHighDefect = summary && summary.todayDefectRate >= 5.0;
   const hasLowStock = summary && summary.belowSafetyStockCount > 0;
-  const hasAnomaly = hasHighDefect || hasLowStock;
+  const hasPaused = summary && (summary.pausedWorkOrderCount || 0) > 0;
+  const hasAnomaly = hasHighDefect || hasLowStock || hasPaused;
+
+  const anomalyParts = [];
+  if (hasPaused) anomalyParts.push(`일시정지 작업 ${summary.pausedWorkOrderCount}건`);
+  if (hasLowStock) anomalyParts.push(`안전재고 미만 품목 ${summary.belowSafetyStockCount}건`);
+  if (hasHighDefect) anomalyParts.push(`기준일 불량률 주의(${summary.todayDefectRate.toFixed(1)}%)`);
 
   return (
     <div>
@@ -99,20 +109,20 @@ export default function DashboardPage() {
         <div className="anomaly-banner" role="alert">
           <div className="anomaly-banner-main">
             <IconAlert size={20} />
-            <span>
-              이상 징후 감지:
-              {hasLowStock && ` 안전재고 미만 품목 ${summary.belowSafetyStockCount}건`}
-              {hasLowStock && hasHighDefect && ' ·'}
-              {hasHighDefect && ` 기준일 불량률 주의(${summary.todayDefectRate.toFixed(1)}%)`}
-            </span>
+            <span>이상 징후 감지: {anomalyParts.join(' · ')}</span>
           </div>
           <div className="anomaly-banner-actions">
+            {hasPaused && (
+              <Link to="/production" className="btn btn-warning btn-sm">
+                일시정지 작업 확인
+              </Link>
+            )}
             {hasLowStock && (
               <Link to="/inventories" className="btn btn-danger btn-sm">
                 재고 보충(입고) 바로가기
               </Link>
             )}
-            {hasHighDefect && (
+            {hasHighDefect && !hasPaused && (
               <Link to="/production" className="btn btn-secondary btn-sm">
                 생산실적 점검
               </Link>
@@ -131,10 +141,10 @@ export default function DashboardPage() {
             <KpiCard
               label="진행 중 작업지시"
               value={`${formatNumber(summary.inProgressWorkOrderCount)}건`}
-              sub={`대기 ${formatNumber(summary.waitingWorkOrderCount)}건 · 완료 ${formatNumber(
-                summary.completedWorkOrderCount
-              )}건`}
-              tone="primary"
+              sub={`일시정지 ${formatNumber(summary.pausedWorkOrderCount || 0)}건 · 대기 ${formatNumber(
+                summary.waitingWorkOrderCount
+              )}건 · 완료 ${formatNumber(summary.completedWorkOrderCount)}건`}
+              tone={hasPaused ? 'warning' : 'primary'}
               icon={<IconClipboard size={18} />}
             />
 
@@ -169,14 +179,15 @@ export default function DashboardPage() {
             <div className="card">
               <div className="card-header">
                 <h3 className="card-title">
-                  진행 중 작업지시 ({summary.inProgressWorkOrders.length}건)
+                  진행 · 일시정지 작업지시 ({activeOrders.length}건
+                  {hasPaused ? ` · 일시정지 ${pausedList.length}건` : ''})
                 </h3>
                 <Link to="/production" className="btn btn-secondary btn-sm">
                   생산 관리로 이동
                 </Link>
               </div>
-              {summary.inProgressWorkOrders.length === 0 ? (
-                <EmptyState message="현재 진행 중인 작업지시가 없습니다." />
+              {activeOrders.length === 0 ? (
+                <EmptyState message="현재 진행 중이거나 일시정지된 작업지시가 없습니다." />
               ) : (
                 <div className="table-wrap">
                   <table>
@@ -186,12 +197,12 @@ export default function DashboardPage() {
                         <th>완제품</th>
                         <th className="text-right">목표/양품</th>
                         <th>진행률</th>
-                        <th>상태</th>
+                        <th>상태 / 정지 사유</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {summary.inProgressWorkOrders.map((wo) => (
-                        <tr key={wo.id}>
+                      {activeOrders.map((wo) => (
+                        <tr key={wo.id} className={wo.status === 'PAUSED' ? 'row-paused' : ''}>
                           <td style={{ fontWeight: 700 }}>{wo.orderNumber}</td>
                           <td>
                             {wo.itemName}{' '}
@@ -214,8 +225,15 @@ export default function DashboardPage() {
                           </td>
                           <td>
                             <StatusBadge variant={workOrderStatusVariant(wo.status)}>
-                              {wo.statusDescription}
+                              {wo.status === 'PAUSED' && <IconPause size={11} />}
+                              <span>{wo.statusDescription}</span>
                             </StatusBadge>
+                            {wo.status === 'PAUSED' && wo.pauseReason && (
+                              <div className="pause-meta">
+                                {wo.pauseReason}
+                                {wo.pausedAt ? ` · ${formatDateTime(wo.pausedAt)}` : ''}
+                              </div>
+                            )}
                           </td>
                         </tr>
                       ))}

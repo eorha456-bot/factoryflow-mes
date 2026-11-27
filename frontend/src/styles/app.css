@@ -991,6 +991,79 @@ tr.row-inactive {
   flex-wrap: wrap;
 }
 
+/* Pause Work Order Styles */
+.nav-alert-badge.warning {
+  background-color: #f59e0b;
+  color: #0f172a;
+}
+
+tr.row-paused {
+  background-color: #fff7ed;
+}
+
+tr.row-paused td:first-child {
+  box-shadow: inset 4px 0 0 #f59e0b;
+}
+
+.pause-meta {
+  margin-top: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #b45309;
+  white-space: normal;
+  max-width: 240px;
+}
+
+.btn-warning {
+  background-color: #fffbeb;
+  color: #b45309;
+  border-color: #fcd34d;
+}
+
+.btn-warning:hover:not(:disabled) {
+  background-color: #fef3c7;
+}
+
+.btn-warning-solid {
+  background-color: #d97706;
+  color: #ffffff;
+}
+
+.btn-warning-solid:hover:not(:disabled) {
+  background-color: #b45309;
+}
+
+.pause-chip-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.pause-reason-chip {
+  min-height: var(--btn-sm-min-h);
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1.5px solid var(--border);
+  background: #f8fafc;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.pause-reason-chip:hover {
+  border-color: #f59e0b;
+  background: #fffbeb;
+}
+
+.pause-reason-chip.active {
+  background: #d97706;
+  border-color: #d97706;
+  color: #ffffff;
+}
+
 @media (max-width: 900px) {
   .app-shell {
     flex-direction: column;

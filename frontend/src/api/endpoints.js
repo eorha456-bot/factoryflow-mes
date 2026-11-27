@@ -43,8 +43,11 @@ export const inventoryApi = {
 export const productionApi = {
   listWorkOrders: (params) => apiRequest('/api/work-orders', { params }),
   createWorkOrder: (body) => apiRequest('/api/work-orders', { method: 'POST', body }),
-  updateWorkOrderStatus: (id, status) =>
-    apiRequest(`/api/work-orders/${id}/status`, { method: 'PATCH', body: { status } }),
+  updateWorkOrderStatus: (id, status, reason) =>
+    apiRequest(`/api/work-orders/${id}/status`, {
+      method: 'PATCH',
+      body: reason ? { status, reason } : { status },
+    }),
   recordResult: (workOrderId, body) =>
     apiRequest(`/api/work-orders/${workOrderId}/results`, { method: 'POST', body }),
   listResultsByOrder: (workOrderId) => apiRequest(`/api/work-orders/${workOrderId}/results`),

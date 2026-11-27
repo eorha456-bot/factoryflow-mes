@@ -3,7 +3,8 @@ import { bomApi, inventoryApi, itemApi, productionApi } from '../api/endpoints';
 import StatusBadge, { workOrderStatusVariant } from '../components/StatusBadge';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import EmptyState from '../components/ui/EmptyState';
-import { IconAlert, IconCheckCircle, IconRefresh } from '../components/ui/Icons';
+import { IconAlert, IconCheckCircle, IconPause, IconPlay, IconRefresh } from '../components/ui/Icons';
+import PauseWorkOrderModal from '../components/ui/PauseWorkOrderModal';
 import SearchSortBar from '../components/ui/SearchSortBar';
 import { useToast } from '../context/ToastContext';
 import {
@@ -66,6 +67,7 @@ export default function ProductionPage() {
   });
 
   const [pendingStatusChange, setPendingStatusChange] = useState(null);
+  const [pausingOrder, setPausingOrder] = useState(null);
   const [pendingResultSubmit, setPendingResultSubmit] = useState(null);
 
   const [loading, setLoading] = useState(true);
@@ -310,19 +312,20 @@ export default function ProductionPage() {
     }
   }
 
-  async function executeStatusChange(order, nextStatus) {
+  async function executeStatusChange(order, nextStatus, reason) {
     setSubmitting(true);
     try {
-      const res = await productionApi.updateWorkOrderStatus(order.id, nextStatus);
+      const res = await productionApi.updateWorkOrderStatus(order.id, nextStatus, reason);
       toast.success(res.message || '작업지시 상태가 변경되었습니다.');
       if (selectedOrder && selectedOrder.id === order.id) {
-        if (nextStatus === 'COMPLETED' || nextStatus === 'CANCELED') {
+        if (nextStatus === 'PAUSED' || nextStatus === 'COMPLETED' || nextStatus === 'CANCELED') {
           setSelectedOrder(null);
         } else {
           setSelectedOrder(res.data);
         }
       }
       setPendingStatusChange(null);
+      setPausingOrder(null);
       await loadWorkOrders();
       notifyDataChanged();
     } catch (err) {
@@ -333,7 +336,13 @@ export default function ProductionPage() {
   }
 
   function requestStatusChange(order, nextStatus) {
-    if (nextStatus === 'COMPLETED' || nextStatus === 'CANCELED') {
+    if (nextStatus === 'PAUSED') {
+      setPausingOrder(order);
+    } else if (
+      nextStatus === 'COMPLETED' ||
+      nextStatus === 'CANCELED' ||
+      (order.status === 'PAUSED' && nextStatus === 'IN_PROGRESS')
+    ) {
       setPendingStatusChange({ order, nextStatus });
     } else {
       executeStatusChange(order, nextStatus);
@@ -661,6 +670,7 @@ export default function ProductionPage() {
               <option value="">전체 상태</option>
               <option value="WAITING">대기</option>
               <option value="IN_PROGRESS">작업중</option>
+              <option value="PAUSED">일시정지</option>
               <option value="COMPLETED">완료</option>
               <option value="CANCELED">취소</option>
             </select>
@@ -699,8 +709,13 @@ export default function ProductionPage() {
               <tbody>
                 {filteredWorkOrders.map((wo) => {
                   const canRecord = wo.status === 'WAITING' || wo.status === 'IN_PROGRESS';
+                  const isPaused = wo.status === 'PAUSED';
+                  const canCancel =
+                    (wo.status === 'WAITING' || isPaused) &&
+                    wo.producedGoodQuantity === 0 &&
+                    wo.producedDefectQuantity === 0;
                   return (
-                    <tr key={wo.id}>
+                    <tr key={wo.id} className={isPaused ? 'row-paused' : ''}>
                       <td style={{ fontWeight: 700 }}>{wo.orderNumber}</td>
                       <td>
                         [{wo.itemCode}] {wo.itemName}
@@ -731,8 +746,15 @@ export default function ProductionPage() {
                       </td>
                       <td>
                         <StatusBadge variant={workOrderStatusVariant(wo.status)}>
+                          {isPaused && <IconPause size={12} />}
                           {wo.statusDescription}
                         </StatusBadge>
+                        {isPaused && wo.pauseReason && (
+                          <div className="pause-meta">
+                            {wo.pauseReason}
+                            {wo.pausedAt ? ` · ${formatDateTime(wo.pausedAt)}` : ''}
+                          </div>
+                        )}
                       </td>
                       <td>
                         <div className="inline-actions">
@@ -755,25 +777,52 @@ export default function ProductionPage() {
                             </button>
                           )}
                           {wo.status === 'IN_PROGRESS' && (
-                            <button
-                              type="button"
-                              className="btn btn-secondary btn-sm"
-                              onClick={() => requestStatusChange(wo, 'COMPLETED')}
-                            >
-                              완료
-                            </button>
-                          )}
-                          {wo.status === 'WAITING' &&
-                            wo.producedGoodQuantity === 0 &&
-                            wo.producedDefectQuantity === 0 && (
+                            <>
                               <button
                                 type="button"
-                                className="btn btn-danger btn-sm"
-                                onClick={() => requestStatusChange(wo, 'CANCELED')}
+                                className="btn btn-warning btn-sm"
+                                onClick={() => requestStatusChange(wo, 'PAUSED')}
                               >
-                                취소
+                                <IconPause size={13} />
+                                <span>일시정지</span>
                               </button>
-                            )}
+                              <button
+                                type="button"
+                                className="btn btn-secondary btn-sm"
+                                onClick={() => requestStatusChange(wo, 'COMPLETED')}
+                              >
+                                완료
+                              </button>
+                            </>
+                          )}
+                          {isPaused && (
+                            <>
+                              <button
+                                type="button"
+                                className="btn btn-primary btn-sm"
+                                onClick={() => requestStatusChange(wo, 'IN_PROGRESS')}
+                              >
+                                <IconPlay size={13} />
+                                <span>작업 재개</span>
+                              </button>
+                              <button
+                                type="button"
+                                className="btn btn-secondary btn-sm"
+                                onClick={() => requestStatusChange(wo, 'COMPLETED')}
+                              >
+                                완료
+                              </button>
+                            </>
+                          )}
+                          {canCancel && (
+                            <button
+                              type="button"
+                              className="btn btn-danger btn-sm"
+                              onClick={() => requestStatusChange(wo, 'CANCELED')}
+                            >
+                              취소
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -998,42 +1047,77 @@ export default function ProductionPage() {
         )}
       </div>
 
-      {/* 작업지시 완료/취소 확인 모달 */}
+      {/* 작업지시 재개/완료/취소 확인 모달 */}
       <ConfirmModal
         open={Boolean(pendingStatusChange)}
         title={
-          pendingStatusChange?.nextStatus === 'COMPLETED'
+          pendingStatusChange?.nextStatus === 'IN_PROGRESS'
+            ? '작업지시 재개 확인'
+            : pendingStatusChange?.nextStatus === 'COMPLETED'
             ? '작업지시 완료 확인'
             : '작업지시 취소 확인'
         }
         message={
-          pendingStatusChange?.nextStatus === 'COMPLETED'
+          pendingStatusChange?.nextStatus === 'IN_PROGRESS'
+            ? '일시정지된 작업지시를 작업중(IN_PROGRESS) 상태로 재개하시겠습니까?'
+            : pendingStatusChange?.nextStatus === 'COMPLETED'
             ? '이 작업지시를 완료 상태로 마감하시겠습니까?'
             : '이 작업지시를 취소하시겠습니까?'
         }
         details={
           pendingStatusChange
-            ? [
-                `작업지시: ${pendingStatusChange.order.orderNumber} (${pendingStatusChange.order.itemName})`,
-                `현재 누적 양품: ${formatNumber(
-                  pendingStatusChange.order.producedGoodQuantity
-                )} / 목표 ${formatNumber(pendingStatusChange.order.targetQuantity)} ${
-                  pendingStatusChange.order.unit
-                }`,
-                '완료 또는 취소된 작업지시는 다시 되돌리거나 추가 실적을 등록할 수 없습니다.',
-              ]
+            ? pendingStatusChange.nextStatus === 'IN_PROGRESS'
+              ? [
+                  `작업지시: ${pendingStatusChange.order.orderNumber} (${pendingStatusChange.order.itemName})`,
+                  ...(pendingStatusChange.order.pauseReason
+                    ? [`일시정지 사유: ${pendingStatusChange.order.pauseReason}`]
+                    : []),
+                  ...(pendingStatusChange.order.pausedAt
+                    ? [`일시정지 시각: ${formatDateTime(pendingStatusChange.order.pausedAt)}`]
+                    : []),
+                  '재개 즉시 생산실적 등록이 다시 가능해지며, 일시정지 사유는 해제됩니다.',
+                ]
+              : [
+                  `작업지시: ${pendingStatusChange.order.orderNumber} (${pendingStatusChange.order.itemName})`,
+                  `현재 누적 양품: ${formatNumber(
+                    pendingStatusChange.order.producedGoodQuantity
+                  )} / 목표 ${formatNumber(pendingStatusChange.order.targetQuantity)} ${
+                    pendingStatusChange.order.unit
+                  }`,
+                  '완료 또는 취소된 작업지시는 다시 되돌리거나 추가 실적을 등록할 수 없습니다.',
+                ]
             : []
         }
         confirmLabel={
-          pendingStatusChange?.nextStatus === 'COMPLETED' ? '작업 완료 처리' : '작업 취소'
+          pendingStatusChange?.nextStatus === 'IN_PROGRESS'
+            ? '작업 재개'
+            : pendingStatusChange?.nextStatus === 'COMPLETED'
+            ? '작업 완료 처리'
+            : '작업 취소'
         }
-        tone={pendingStatusChange?.nextStatus === 'COMPLETED' ? 'warning' : 'danger'}
+        tone={
+          pendingStatusChange?.nextStatus === 'IN_PROGRESS'
+            ? 'primary'
+            : pendingStatusChange?.nextStatus === 'COMPLETED'
+            ? 'warning'
+            : 'danger'
+        }
         loading={submitting}
         onConfirm={() =>
           pendingStatusChange &&
           executeStatusChange(pendingStatusChange.order, pendingStatusChange.nextStatus)
         }
         onCancel={() => setPendingStatusChange(null)}
+      />
+
+      {/* 작업지시 일시정지 사유 선택/입력 모달 */}
+      <PauseWorkOrderModal
+        order={pausingOrder}
+        loading={submitting}
+        onConfirm={(reason) =>
+          pausingOrder && executeStatusChange(pausingOrder, 'PAUSED', reason)
+        }
+        onCancel={() => setPausingOrder(null)}
       />
 
       {/* 생산실적 등록 및 재고 반영 확인 모달 */}

@@ -8,6 +8,8 @@ export function workOrderStatusVariant(status) {
       return 'neutral';
     case 'IN_PROGRESS':
       return 'info';
+    case 'PAUSED':
+      return 'warning';
     case 'COMPLETED':
       return 'success';
     case 'CANCELED':

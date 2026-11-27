@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
-import { healthApi, inventoryApi } from '../api/endpoints';
+import { healthApi, inventoryApi, productionApi } from '../api/endpoints';
 import {
   IconBox,
   IconClipboard,
@@ -54,8 +54,9 @@ const NAV_ITEMS = [
     to: '/production',
     label: '작업지시 · 실적',
     icon: IconClipboard,
+    showPausedBadge: true,
     title: '생산 · 작업지시 및 실적 관리',
-    subtitle: '작업지시 발행, 상태 전환, 생산실적 등록(BOM 원재료 자동 차감·완제품 증가)을 처리합니다.',
+    subtitle: '작업지시 발행, 상태 전환(일시정지/재개), 생산실적 등록(BOM 재고 자동 연동)을 처리합니다.',
   },
 ];
 
@@ -63,6 +64,7 @@ export default function Layout() {
   const location = useLocation();
   const [serverStatus, setServerStatus] = useState('checking');
   const [lowStockCount, setLowStockCount] = useState(0);
+  const [pausedCount, setPausedCount] = useState(0);
   const [fieldMode, setFieldMode] = useState(() => {
     try {
       return window.localStorage.getItem(UI_MODE_KEY) === 'field';
@@ -84,8 +86,12 @@ export default function Layout() {
     try {
       await healthApi.check();
       setServerStatus('up');
-      const lowRes = await inventoryApi.list({ belowSafetyOnly: true });
+      const [lowRes, pausedRes] = await Promise.all([
+        inventoryApi.list({ belowSafetyOnly: true }),
+        productionApi.listWorkOrders({ status: 'PAUSED' }),
+      ]);
       setLowStockCount((lowRes.data || []).length);
+      setPausedCount((pausedRes.data || []).length);
     } catch {
       setServerStatus('down');
     }
@@ -136,6 +142,14 @@ export default function Layout() {
                     title={`안전재고 미만 ${lowStockCount}건`}
                   >
                     {lowStockCount}
+                  </span>
+                )}
+                {item.showPausedBadge && pausedCount > 0 && (
+                  <span
+                    className="nav-alert-badge warning"
+                    title={`일시정지 작업지시 ${pausedCount}건`}
+                  >
+                    {pausedCount}
                   </span>
                 )}
               </NavLink>
