@@ -1,0 +1,23 @@
+# Git & IDE
+.git
+.gitignore
+.idea
+.vscode
+*.iml
+
+# Local build outputs
+.gradle
+build
+out
+
+# Frontend (Vercel에서 별도 배포하므로 백엔드 이미지에서 제외)
+frontend
+
+# Docs & Logs
+docs
+*.log
+
+# Secrets & Local-only config (절대 컨테이너 이미지에 포함 금지)
+.env
+.env.*
+src/main/resources/application-local.properties
