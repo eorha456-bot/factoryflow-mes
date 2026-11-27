@@ -43,7 +43,7 @@ export async function apiRequest(path, { method = 'GET', params, body } = {}) {
   try {
     response = await fetch(url, options);
   } catch {
-    throw new Error('백엔드 서버(http://localhost:8080)에 연결할 수 없습니다. 서버 실행 상태를 확인해 주세요.');
+    throw new Error('백엔드 API 서버에 연결할 수 없습니다. 서버 실행 상태 또는 네트워크 연결을 확인해 주세요.');
   }
 
   let payload = null;
