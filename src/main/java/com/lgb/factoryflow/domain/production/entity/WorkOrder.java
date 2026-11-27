@@ -22,6 +22,7 @@ import lombok.NoArgsConstructor;
 import org.springframework.http.HttpStatus;
 
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
@@ -50,7 +51,7 @@ public class WorkOrder extends BaseTimeEntity {
     private int producedDefectQuantity;
 
     @Enumerated(EnumType.STRING)
-    @Column(nullable = false, length = 30)
+    @Column(nullable = false, length = 30, columnDefinition = "varchar(30)")
     private WorkOrderStatus status;
 
     @Column(nullable = false)
@@ -58,6 +59,11 @@ public class WorkOrder extends BaseTimeEntity {
 
     @Column(length = 255)
     private String remark;
+
+    @Column(length = 200)
+    private String pauseReason;
+
+    private LocalDateTime pausedAt;
 
     @Version
     private Long version;
@@ -84,6 +90,10 @@ public class WorkOrder extends BaseTimeEntity {
     }
 
     public void changeStatus(WorkOrderStatus nextStatus) {
+        changeStatus(nextStatus, null);
+    }
+
+    public void changeStatus(WorkOrderStatus nextStatus, String reason) {
         if (this.status == nextStatus) {
             return;
         }
@@ -94,16 +104,36 @@ public class WorkOrder extends BaseTimeEntity {
             );
         }
         if (nextStatus == WorkOrderStatus.WAITING) {
-            throw new BusinessException(HttpStatus.BAD_REQUEST, "작업 중 상태에서 대기 상태로 되돌릴 수 없습니다.");
+            throw new BusinessException(HttpStatus.BAD_REQUEST, "진행 중이거나 일시정지된 작업지시는 대기 상태로 되돌릴 수 없습니다.");
+        }
+        if (nextStatus == WorkOrderStatus.PAUSED) {
+            if (this.status != WorkOrderStatus.IN_PROGRESS) {
+                throw new BusinessException(HttpStatus.BAD_REQUEST, "작업 중인 작업지시만 일시정지할 수 있습니다.");
+            }
+            if (reason == null || reason.isBlank()) {
+                throw new BusinessException(HttpStatus.BAD_REQUEST, "일시정지 사유는 필수입니다.");
+            }
+            this.status = WorkOrderStatus.PAUSED;
+            this.pauseReason = reason.trim();
+            this.pausedAt = LocalDateTime.now();
+            return;
         }
         if (nextStatus == WorkOrderStatus.CANCELED
                 && (this.producedGoodQuantity > 0 || this.producedDefectQuantity > 0)) {
             throw new BusinessException(HttpStatus.BAD_REQUEST, "이미 생산실적이 등록된 작업지시는 취소할 수 없습니다.");
         }
         this.status = nextStatus;
+        this.pauseReason = null;
+        this.pausedAt = null;
     }
 
     public void recordProduction(int goodQuantity, int defectQuantity) {
+        if (this.status == WorkOrderStatus.PAUSED) {
+            throw new BusinessException(
+                    HttpStatus.BAD_REQUEST,
+                    "일시정지된 작업지시에는 생산실적을 등록할 수 없습니다. 작업을 재개한 뒤 등록해 주세요."
+            );
+        }
         if (this.status == WorkOrderStatus.COMPLETED || this.status == WorkOrderStatus.CANCELED) {
             throw new BusinessException(
                     HttpStatus.BAD_REQUEST,

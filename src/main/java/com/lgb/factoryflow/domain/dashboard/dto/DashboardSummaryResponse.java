@@ -16,6 +16,7 @@ public class DashboardSummaryResponse {
 
     private final long waitingWorkOrderCount;
     private final long inProgressWorkOrderCount;
+    private final long pausedWorkOrderCount;
     private final long completedWorkOrderCount;
 
     private final int todayResultCount;
@@ -27,4 +28,5 @@ public class DashboardSummaryResponse {
     private final int belowSafetyStockCount;
     private final List<InventoryResponse> belowSafetyStockItems;
     private final List<WorkOrderResponse> inProgressWorkOrders;
+    private final List<WorkOrderResponse> pausedWorkOrders;
 }

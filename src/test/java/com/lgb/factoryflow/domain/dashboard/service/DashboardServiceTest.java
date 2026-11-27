@@ -91,9 +91,20 @@ class DashboardServiceTest {
                 .active(true)
                 .build();
 
+        WorkOrder pausedOrder = WorkOrder.builder()
+                .orderNumber("WO-20261127-002")
+                .item(box)
+                .targetQuantity(150)
+                .plannedDate(targetDate)
+                .build();
+        pausedOrder.changeStatus(WorkOrderStatus.IN_PROGRESS);
+        pausedOrder.changeStatus(WorkOrderStatus.PAUSED, "원자재 부족");
+
         given(workOrderRepository.countByStatus(WorkOrderStatus.WAITING)).willReturn(3L);
         given(workOrderRepository.findByStatusOrderByIdDesc(WorkOrderStatus.IN_PROGRESS))
                 .willReturn(List.of(inProgressOrder));
+        given(workOrderRepository.findByStatusOrderByIdDesc(WorkOrderStatus.PAUSED))
+                .willReturn(List.of(pausedOrder));
         given(workOrderRepository.countByStatus(WorkOrderStatus.COMPLETED)).willReturn(5L);
         given(productionResultRepository.findByCreatedAtGreaterThanEqualAndCreatedAtLessThanOrderByIdDesc(
                 startOfDay, nextDayStart))
@@ -105,6 +116,7 @@ class DashboardServiceTest {
         assertThat(summary.getBaseDate()).isEqualTo(targetDate);
         assertThat(summary.getWaitingWorkOrderCount()).isEqualTo(3L);
         assertThat(summary.getInProgressWorkOrderCount()).isEqualTo(1L);
+        assertThat(summary.getPausedWorkOrderCount()).isEqualTo(1L);
         assertThat(summary.getCompletedWorkOrderCount()).isEqualTo(5L);
 
         // 양품 93 + 45 = 138, 불량 7 + 5 = 12, 총 150, 불량률 = 12 / 150 * 100 = 8.0%
@@ -119,6 +131,8 @@ class DashboardServiceTest {
         assertThat(summary.getBelowSafetyStockItems().get(0).getItemCode()).isEqualTo("RAW-001");
         assertThat(summary.getInProgressWorkOrders()).hasSize(1);
         assertThat(summary.getInProgressWorkOrders().get(0).getOrderNumber()).isEqualTo("WO-20261127-001");
+        assertThat(summary.getPausedWorkOrders()).hasSize(1);
+        assertThat(summary.getPausedWorkOrders().get(0).getPauseReason()).isEqualTo("원자재 부족");
     }
 
     @Test

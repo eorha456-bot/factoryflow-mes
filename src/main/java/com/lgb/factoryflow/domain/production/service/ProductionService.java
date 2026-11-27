@@ -91,7 +91,7 @@ public class ProductionService {
     @Transactional
     public WorkOrderResponse updateWorkOrderStatus(Long id, WorkOrderStatusUpdateRequest request) {
         WorkOrder workOrder = findWorkOrderById(id);
-        workOrder.changeStatus(request.getStatus());
+        workOrder.changeStatus(request.getStatus(), request.getReason());
         return WorkOrderResponse.from(workOrder);
     }
 

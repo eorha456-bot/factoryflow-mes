@@ -36,6 +36,11 @@ public class DashboardService {
                 .stream()
                 .map(WorkOrderResponse::from)
                 .toList();
+        List<WorkOrderResponse> pausedWorkOrders = workOrderRepository
+                .findByStatusOrderByIdDesc(WorkOrderStatus.PAUSED)
+                .stream()
+                .map(WorkOrderResponse::from)
+                .toList();
         long completedCount = workOrderRepository.countByStatus(WorkOrderStatus.COMPLETED);
 
         List<ProductionResult> dailyResults = productionResultRepository
@@ -56,6 +61,7 @@ public class DashboardService {
                 .baseDate(baseDate)
                 .waitingWorkOrderCount(waitingCount)
                 .inProgressWorkOrderCount(inProgressWorkOrders.size())
+                .pausedWorkOrderCount(pausedWorkOrders.size())
                 .completedWorkOrderCount(completedCount)
                 .todayResultCount(dailyResults.size())
                 .todayGoodQuantity(goodQuantity)
@@ -65,6 +71,7 @@ public class DashboardService {
                 .belowSafetyStockCount(belowSafetyStockItems.size())
                 .belowSafetyStockItems(belowSafetyStockItems)
                 .inProgressWorkOrders(inProgressWorkOrders)
+                .pausedWorkOrders(pausedWorkOrders)
                 .build();
     }
 

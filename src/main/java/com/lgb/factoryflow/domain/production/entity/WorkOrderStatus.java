@@ -8,6 +8,7 @@ import lombok.RequiredArgsConstructor;
 public enum WorkOrderStatus {
     WAITING("대기"),
     IN_PROGRESS("작업중"),
+    PAUSED("일시정지"),
     COMPLETED("완료"),
     CANCELED("취소");
 

@@ -26,6 +26,8 @@ public class WorkOrderResponse {
     private final String statusDescription;
     private final LocalDate plannedDate;
     private final String remark;
+    private final String pauseReason;
+    private final LocalDateTime pausedAt;
     private final LocalDateTime createdAt;
     private final LocalDateTime updatedAt;
 
@@ -45,6 +47,8 @@ public class WorkOrderResponse {
                 .statusDescription(workOrder.getStatus().getDescription())
                 .plannedDate(workOrder.getPlannedDate())
                 .remark(workOrder.getRemark())
+                .pauseReason(workOrder.getPauseReason())
+                .pausedAt(workOrder.getPausedAt())
                 .createdAt(workOrder.getCreatedAt())
                 .updatedAt(workOrder.getUpdatedAt())
                 .build();

@@ -9,6 +9,8 @@ import com.lgb.factoryflow.domain.item.repository.ItemRepository;
 import com.lgb.factoryflow.domain.production.dto.ProductionResultCreateRequest;
 import com.lgb.factoryflow.domain.production.dto.WorkOrderCreateRequest;
 import com.lgb.factoryflow.domain.production.dto.WorkOrderResponse;
+import com.lgb.factoryflow.domain.production.dto.WorkOrderStatusUpdateRequest;
+import com.lgb.factoryflow.domain.production.entity.WorkOrderStatus;
 import com.lgb.factoryflow.domain.production.service.ProductionService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -38,7 +40,7 @@ class DashboardIntegrationTest {
 
     @Test
     @Transactional
-    @DisplayName("대시보드 요약 조회가 실제 DB의 작업지시 상태, 금일 생산실적, 활성 안전재고 미만 품목을 통합 집계한다")
+    @DisplayName("대시보드 요약 조회가 실제 DB의 작업지시 상태(일시정지 포함), 금일 생산실적, 활성 안전재고 미만 품목을 통합 집계한다")
     void getSummaryAggregatesRealDatabaseState() {
         LocalDate today = LocalDate.now();
         DashboardSummaryResponse before = dashboardService.getSummary(today);
@@ -98,11 +100,23 @@ class DashboardIntegrationTest {
                 new ProductionResultCreateRequest(90, 10, "김작업", "금일 실적")
         );
 
+        // 일시정지 작업지시 1건
+        WorkOrderResponse pausedOrder = productionService.createWorkOrder(new WorkOrderCreateRequest(
+                "WO-DS-PAUSE-" + suffix,
+                box.getId(),
+                120,
+                today,
+                "정지 테스트"
+        ));
+        productionService.updateWorkOrderStatus(pausedOrder.getId(), new WorkOrderStatusUpdateRequest(WorkOrderStatus.IN_PROGRESS));
+        productionService.updateWorkOrderStatus(pausedOrder.getId(), new WorkOrderStatusUpdateRequest(WorkOrderStatus.PAUSED, "설비 점검/고장"));
+
         DashboardSummaryResponse after = dashboardService.getSummary(today);
 
         assertThat(after.getBaseDate()).isEqualTo(today);
         assertThat(after.getWaitingWorkOrderCount()).isEqualTo(before.getWaitingWorkOrderCount() + 1);
         assertThat(after.getInProgressWorkOrderCount()).isEqualTo(before.getInProgressWorkOrderCount() + 1);
+        assertThat(after.getPausedWorkOrderCount()).isEqualTo(before.getPausedWorkOrderCount() + 1);
         assertThat(after.getTodayResultCount()).isEqualTo(before.getTodayResultCount() + 1);
         assertThat(after.getTodayGoodQuantity()).isEqualTo(before.getTodayGoodQuantity() + 90);
         assertThat(after.getTodayDefectQuantity()).isEqualTo(before.getTodayDefectQuantity() + 10);
@@ -112,6 +126,13 @@ class DashboardIntegrationTest {
                 .anySatisfy(wo -> {
                     assertThat(wo.getOrderNumber()).isEqualTo("WO-DS-PROG-" + suffix);
                     assertThat(wo.getProducedGoodQuantity()).isEqualTo(90);
+                });
+
+        assertThat(after.getPausedWorkOrders())
+                .anySatisfy(wo -> {
+                    assertThat(wo.getOrderNumber()).isEqualTo("WO-DS-PAUSE-" + suffix);
+                    assertThat(wo.getPauseReason()).isEqualTo("설비 점검/고장");
+                    assertThat(wo.getPausedAt()).isNotNull();
                 });
 
         assertThat(after.getBelowSafetyStockItems())
