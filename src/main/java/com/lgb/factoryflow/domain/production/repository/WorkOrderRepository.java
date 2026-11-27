@@ -26,4 +26,6 @@ public interface WorkOrderRepository extends JpaRepository<WorkOrder, Long> {
 
     @EntityGraph(attributePaths = {"item"})
     List<WorkOrder> findByStatusAndItemIdOrderByIdDesc(WorkOrderStatus status, Long itemId);
+
+    long countByStatus(WorkOrderStatus status);
 }

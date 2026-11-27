@@ -17,4 +17,9 @@ public interface ProductionResultRepository extends JpaRepository<ProductionResu
 
     @EntityGraph(attributePaths = {"workOrder", "workOrder.item"})
     List<ProductionResult> findByCreatedAtBetweenOrderByIdDesc(LocalDateTime start, LocalDateTime end);
+
+    List<ProductionResult> findByCreatedAtGreaterThanEqualAndCreatedAtLessThanOrderByIdDesc(
+            LocalDateTime startInclusive,
+            LocalDateTime endExclusive
+    );
 }
