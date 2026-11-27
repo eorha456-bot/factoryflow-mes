@@ -10,6 +10,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -40,5 +41,22 @@ class HealthControllerTest {
                         .header("Access-Control-Request-Method", "GET"))
                 .andExpect(status().isOk())
                 .andExpect(header().string("Access-Control-Allow-Origin", "http://localhost:5173"));
+    }
+
+    @Test
+    @DisplayName("존재하지 않는 경로 요청 시 500이 아닌 404 Not Found를 반환한다")
+    void unknownPathReturnsNotFound() throws Exception {
+        mockMvc.perform(get("/"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.message").value("요청하신 리소스(API 경로)를 찾을 수 없습니다."));
+    }
+
+    @Test
+    @DisplayName("지원하지 않는 HTTP 메서드 요청 시 405 Method Not Allowed를 반환한다")
+    void unsupportedMethodReturnsMethodNotAllowed() throws Exception {
+        mockMvc.perform(post("/api/health"))
+                .andExpect(status().isMethodNotAllowed())
+                .andExpect(jsonPath("$.success").value(false));
     }
 }
