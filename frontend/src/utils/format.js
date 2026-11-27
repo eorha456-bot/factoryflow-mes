@@ -13,8 +13,18 @@ export function formatDateTime(value) {
   )}:${pad(date.getMinutes())}`;
 }
 
+export function formatTimeOnly(date) {
+  if (!date) return '-';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
 export function getTodayIso() {
   const now = new Date();
   const pad = (n) => String(n).padStart(2, '0');
   return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+}
+
+export function notifyDataChanged() {
+  window.dispatchEvent(new CustomEvent('factoryflow:data-changed'));
 }

@@ -1,6 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { partnerApi } from '../api/endpoints';
 import StatusBadge from '../components/StatusBadge';
+import ConfirmModal from '../components/ui/ConfirmModal';
+import EmptyState from '../components/ui/EmptyState';
+import { IconRefresh } from '../components/ui/Icons';
+import SearchSortBar from '../components/ui/SearchSortBar';
+import { useToast } from '../context/ToastContext';
 
 const INITIAL_FORM = {
   partnerCode: '',
@@ -11,20 +16,28 @@ const INITIAL_FORM = {
   address: '',
 };
 
+const SORT_OPTIONS = [
+  { value: 'latest', label: '정렬: 최신 등록순' },
+  { value: 'codeAsc', label: '정렬: 거래처코드순' },
+  { value: 'nameAsc', label: '정렬: 거래처명순' },
+];
+
 export default function PartnersPage() {
+  const toast = useToast();
   const [partners, setPartners] = useState([]);
   const [filterType, setFilterType] = useState('');
   const [filterActive, setFilterActive] = useState('');
+  const [search, setSearch] = useState('');
+  const [sortBy, setSortBy] = useState('latest');
+
   const [form, setForm] = useState(INITIAL_FORM);
   const [editingId, setEditingId] = useState(null);
+  const [confirmPartner, setConfirmPartner] = useState(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
 
-  async function loadPartners() {
+  const loadPartners = useCallback(async () => {
     setLoading(true);
-    setError('');
     try {
       const res = await partnerApi.list({
         partnerType: filterType || undefined,
@@ -32,15 +45,35 @@ export default function PartnersPage() {
       });
       setPartners(res.data || []);
     } catch (err) {
-      setError(err.message);
+      toast.error(err.message);
     } finally {
       setLoading(false);
     }
-  }
+  }, [filterType, filterActive, toast]);
 
   useEffect(() => {
     loadPartners();
-  }, [filterType, filterActive]);
+  }, [loadPartners]);
+
+  const filteredPartners = useMemo(() => {
+    const keyword = search.trim().toLowerCase();
+    const list = keyword
+      ? partners.filter(
+          (p) =>
+            p.partnerCode.toLowerCase().includes(keyword) ||
+            p.partnerName.toLowerCase().includes(keyword) ||
+            (p.phone && p.phone.toLowerCase().includes(keyword)) ||
+            (p.address && p.address.toLowerCase().includes(keyword))
+        )
+      : [...partners];
+
+    if (sortBy === 'codeAsc') {
+      list.sort((a, b) => a.partnerCode.localeCompare(b.partnerCode));
+    } else if (sortBy === 'nameAsc') {
+      list.sort((a, b) => a.partnerName.localeCompare(b.partnerName, 'ko'));
+    }
+    return list;
+  }, [partners, search, sortBy]);
 
   function handleChange(e) {
     const { name, value } = e.target;
@@ -57,8 +90,7 @@ export default function PartnersPage() {
       phone: partner.phone || '',
       address: partner.address || '',
     });
-    setError('');
-    setNotice('');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
   function cancelEdit() {
@@ -69,9 +101,6 @@ export default function PartnersPage() {
   async function handleSubmit(e) {
     e.preventDefault();
     setSubmitting(true);
-    setError('');
-    setNotice('');
-
     try {
       if (editingId) {
         const res = await partnerApi.update(editingId, {
@@ -81,41 +110,48 @@ export default function PartnersPage() {
           phone: form.phone,
           address: form.address,
         });
-        setNotice(res.message || '거래처 정보가 수정되었습니다.');
+        toast.success(res.message || '거래처 정보가 수정되었습니다.');
         cancelEdit();
       } else {
         const res = await partnerApi.create(form);
-        setNotice(res.message || '거래처가 등록되었습니다.');
+        toast.success(res.message || '거래처가 등록되었습니다.');
         setForm(INITIAL_FORM);
       }
       await loadPartners();
     } catch (err) {
-      setError(err.message);
+      toast.error(err.message);
     } finally {
       setSubmitting(false);
     }
   }
 
-  async function toggleStatus(partner) {
-    setError('');
-    setNotice('');
+  async function executeToggleStatus(partner) {
+    setSubmitting(true);
     try {
       const res = await partnerApi.updateStatus(partner.id, !partner.active);
-      setNotice(res.message || '거래처 상태가 변경되었습니다.');
+      toast.success(res.message || '거래처 상태가 변경되었습니다.');
+      setConfirmPartner(null);
       await loadPartners();
     } catch (err) {
-      setError(err.message);
+      toast.error(err.message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  function requestToggleStatus(partner) {
+    if (partner.active) {
+      setConfirmPartner(partner);
+    } else {
+      executeToggleStatus(partner);
     }
   }
 
   return (
     <div>
-      {error && <div className="alert alert-error">{error}</div>}
-      {notice && <div className="alert alert-success">{notice}</div>}
-
       <div className="card">
         <div className="card-header">
-          <h3 className="card-title">{editingId ? '거래처 수정' : '신규 거래처 등록'}</h3>
+          <h3 className="card-title">{editingId ? '거래처 정보 수정' : '신규 거래처 등록'}</h3>
           {editingId && (
             <button type="button" className="btn btn-secondary btn-sm" onClick={cancelEdit}>
               수정 취소
@@ -206,8 +242,19 @@ export default function PartnersPage() {
 
       <div className="card">
         <div className="card-header">
-          <h3 className="card-title">거래처 목록 ({partners.length}건)</h3>
-          <div className="filter-bar">
+          <h3 className="card-title">
+            거래처 목록 ({filteredPartners.length}
+            {filteredPartners.length !== partners.length ? ` / 전체 ${partners.length}` : ''}건)
+          </h3>
+
+          <SearchSortBar
+            search={search}
+            onSearchChange={setSearch}
+            searchPlaceholder="거래처코드·거래처명·연락처 검색"
+            sortValue={sortBy}
+            onSortChange={setSortBy}
+            sortOptions={SORT_OPTIONS}
+          >
             <select value={filterType} onChange={(e) => setFilterType(e.target.value)}>
               <option value="">전체 구분</option>
               <option value="SUPPLIER">매입처</option>
@@ -219,16 +266,22 @@ export default function PartnersPage() {
               <option value="true">사용 중</option>
               <option value="false">비활성</option>
             </select>
-            <button className="btn btn-secondary btn-sm" onClick={loadPartners} disabled={loading}>
-              새로고침
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={loadPartners}
+              disabled={loading}
+            >
+              <IconRefresh size={14} />
+              <span>새로고침</span>
             </button>
-          </div>
+          </SearchSortBar>
         </div>
 
         {loading ? (
-          <div className="empty-state">거래처 목록을 불러오는 중...</div>
-        ) : partners.length === 0 ? (
-          <div className="empty-state">등록된 거래처가 없습니다.</div>
+          <EmptyState loading message="거래처 목록을 불러오는 중..." />
+        ) : filteredPartners.length === 0 ? (
+          <EmptyState message="조건에 맞는 거래처가 없습니다." />
         ) : (
           <div className="table-wrap">
             <table>
@@ -245,9 +298,9 @@ export default function PartnersPage() {
                 </tr>
               </thead>
               <tbody>
-                {partners.map((p) => (
+                {filteredPartners.map((p) => (
                   <tr key={p.id} className={!p.active ? 'row-inactive' : ''}>
-                    <td>{p.partnerCode}</td>
+                    <td style={{ fontWeight: 700 }}>{p.partnerCode}</td>
                     <td style={{ fontWeight: 600 }}>{p.partnerName}</td>
                     <td>
                       <StatusBadge
@@ -282,7 +335,7 @@ export default function PartnersPage() {
                         <button
                           type="button"
                           className={`btn btn-sm ${p.active ? 'btn-danger' : 'btn-secondary'}`}
-                          onClick={() => toggleStatus(p)}
+                          onClick={() => requestToggleStatus(p)}
                         >
                           {p.active ? '비활성화' : '활성화'}
                         </button>
@@ -295,6 +348,25 @@ export default function PartnersPage() {
           </div>
         )}
       </div>
+
+      <ConfirmModal
+        open={Boolean(confirmPartner)}
+        title="거래처 비활성화 확인"
+        message="이 거래처를 비활성화하시겠습니까?"
+        details={
+          confirmPartner
+            ? [
+                `거래처: [${confirmPartner.partnerCode}] ${confirmPartner.partnerName} (${confirmPartner.partnerTypeDescription})`,
+                '비활성화하면 신규 입출고 거래처 선택 목록에서 제외됩니다.',
+              ]
+            : []
+        }
+        confirmLabel="비활성화"
+        tone="danger"
+        loading={submitting}
+        onConfirm={() => confirmPartner && executeToggleStatus(confirmPartner)}
+        onCancel={() => setConfirmPartner(null)}
+      />
     </div>
   );
 }

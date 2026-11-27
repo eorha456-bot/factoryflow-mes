@@ -1,13 +1,28 @@
-import { useEffect, useState } from 'react';
-import { itemApi, productionApi } from '../api/endpoints';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { bomApi, inventoryApi, itemApi, productionApi } from '../api/endpoints';
 import StatusBadge, { workOrderStatusVariant } from '../components/StatusBadge';
-import { formatDateTime, formatNumber, getTodayIso } from '../utils/format';
+import ConfirmModal from '../components/ui/ConfirmModal';
+import EmptyState from '../components/ui/EmptyState';
+import { IconAlert, IconCheckCircle, IconRefresh } from '../components/ui/Icons';
+import SearchSortBar from '../components/ui/SearchSortBar';
+import { useToast } from '../context/ToastContext';
+import { formatDateTime, formatNumber, getTodayIso, notifyDataChanged } from '../utils/format';
+
+const SORT_OPTIONS = [
+  { value: 'latest', label: '정렬: 최신 등록순' },
+  { value: 'plannedAsc', label: '정렬: 작업 예정일순' },
+  { value: 'progressAsc', label: '정렬: 진행률 낮은순' },
+  { value: 'progressDesc', label: '정렬: 진행률 높은순' },
+];
 
 export default function ProductionPage() {
+  const toast = useToast();
   const [workOrders, setWorkOrders] = useState([]);
   const [results, setResults] = useState([]);
   const [finishedItems, setFinishedItems] = useState([]);
   const [filterStatus, setFilterStatus] = useState('');
+  const [search, setSearch] = useState('');
+  const [sortBy, setSortBy] = useState('latest');
 
   const [orderForm, setOrderForm] = useState({
     orderNumber: '',
@@ -18,6 +33,10 @@ export default function ProductionPage() {
   });
 
   const [selectedOrder, setSelectedOrder] = useState(null);
+  const [selectedOrderBoms, setSelectedOrderBoms] = useState([]);
+  const [inventoryByItemId, setInventoryByItemId] = useState({});
+  const [bomPreviewLoading, setBomPreviewLoading] = useState(false);
+
   const [resultForm, setResultForm] = useState({
     goodQuantity: '',
     defectQuantity: '0',
@@ -25,53 +44,144 @@ export default function ProductionPage() {
     remark: '',
   });
 
+  const [pendingStatusChange, setPendingStatusChange] = useState(null);
+  const [pendingResultSubmit, setPendingResultSubmit] = useState(null);
+
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
 
-  async function loadFinishedItems() {
+  const loadFinishedItems = useCallback(async () => {
     const res = await itemApi.list({ itemType: 'FINISHED_GOOD', active: true });
     setFinishedItems(res.data || []);
-  }
+  }, []);
 
-  async function loadWorkOrders(statusValue = filterStatus) {
-    const res = await productionApi.listWorkOrders({
-      status: statusValue || undefined,
-    });
-    setWorkOrders(res.data || []);
-  }
+  const loadWorkOrders = useCallback(
+    async (statusValue = filterStatus) => {
+      const res = await productionApi.listWorkOrders({
+        status: statusValue || undefined,
+      });
+      setWorkOrders(res.data || []);
+    },
+    [filterStatus]
+  );
 
-  async function loadResults() {
+  const loadResults = useCallback(async () => {
     const res = await productionApi.listAllResults();
     setResults(res.data || []);
-  }
+  }, []);
 
-  async function loadAll() {
+  const loadAll = useCallback(async () => {
     setLoading(true);
-    setError('');
     try {
       await Promise.all([loadFinishedItems(), loadWorkOrders(), loadResults()]);
     } catch (err) {
-      setError(err.message);
+      toast.error(err.message);
     } finally {
       setLoading(false);
     }
-  }
+  }, [loadFinishedItems, loadWorkOrders, loadResults, toast]);
 
   useEffect(() => {
     loadAll();
-  }, []);
+  }, [loadAll]);
 
   useEffect(() => {
-    loadWorkOrders(filterStatus).catch((err) => setError(err.message));
-  }, [filterStatus]);
+    loadWorkOrders(filterStatus).catch((err) => toast.error(err.message));
+  }, [filterStatus, loadWorkOrders, toast]);
+
+  // 선택된 작업지시의 BOM + 원재료 현재고 미리보기 로드
+  const loadBomPreviewData = useCallback(
+    async (order) => {
+      if (!order) {
+        setSelectedOrderBoms([]);
+        return;
+      }
+      setBomPreviewLoading(true);
+      try {
+        const [bomRes, invRes] = await Promise.all([
+          bomApi.list(order.itemId),
+          inventoryApi.list({ itemType: 'RAW_MATERIAL' }),
+        ]);
+        setSelectedOrderBoms(bomRes.data || []);
+        const map = {};
+        (invRes.data || []).forEach((inv) => {
+          map[inv.itemId] = inv.quantity;
+        });
+        setInventoryByItemId(map);
+      } catch (err) {
+        toast.error(err.message);
+      } finally {
+        setBomPreviewLoading(false);
+      }
+    },
+    [toast]
+  );
+
+  function selectOrderForResult(order) {
+    setSelectedOrder(order);
+    setResultForm((prev) => ({
+      goodQuantity: '',
+      defectQuantity: '0',
+      workerName: prev.workerName,
+      remark: '',
+    }));
+    loadBomPreviewData(order);
+  }
+
+  const filteredWorkOrders = useMemo(() => {
+    const keyword = search.trim().toLowerCase();
+    const list = keyword
+      ? workOrders.filter(
+          (wo) =>
+            wo.orderNumber.toLowerCase().includes(keyword) ||
+            wo.itemCode.toLowerCase().includes(keyword) ||
+            wo.itemName.toLowerCase().includes(keyword)
+        )
+      : [...workOrders];
+
+    switch (sortBy) {
+      case 'plannedAsc':
+        list.sort((a, b) => a.plannedDate.localeCompare(b.plannedDate));
+        break;
+      case 'progressAsc':
+        list.sort((a, b) => a.progressRate - b.progressRate);
+        break;
+      case 'progressDesc':
+        list.sort((a, b) => b.progressRate - a.progressRate);
+        break;
+      default:
+        break;
+    }
+    return list;
+  }, [workOrders, search, sortBy]);
+
+  const goodInput = Math.max(0, Number(resultForm.goodQuantity) || 0);
+  const defectInput = Math.max(0, Number(resultForm.defectQuantity) || 0);
+  const totalInput = goodInput + defectInput;
+  const remainingTarget = selectedOrder
+    ? Math.max(0, selectedOrder.targetQuantity - selectedOrder.producedGoodQuantity)
+    : 0;
+
+  const bomRequirements = useMemo(() => {
+    return selectedOrderBoms.map((bom) => {
+      const needed = bom.requiredQuantity * totalInput;
+      const available = inventoryByItemId[bom.rawMaterialId] ?? 0;
+      const remainingAfter = available - needed;
+      return {
+        ...bom,
+        needed,
+        available,
+        remainingAfter,
+        shortage: needed > available,
+      };
+    });
+  }, [selectedOrderBoms, inventoryByItemId, totalInput]);
+
+  const hasBomShortage = bomRequirements.some((item) => item.shortage);
 
   async function handleCreateOrder(e) {
     e.preventDefault();
     setSubmitting(true);
-    setError('');
-    setNotice('');
     try {
       const res = await productionApi.createWorkOrder({
         orderNumber: orderForm.orderNumber.trim() || null,
@@ -80,7 +190,7 @@ export default function ProductionPage() {
         plannedDate: orderForm.plannedDate,
         remark: orderForm.remark,
       });
-      setNotice(res.message || '작업지시가 등록되었습니다.');
+      toast.success(res.message || '작업지시가 등록되었습니다.');
       setOrderForm({
         orderNumber: '',
         itemId: '',
@@ -89,54 +199,102 @@ export default function ProductionPage() {
         remark: '',
       });
       await loadWorkOrders();
+      notifyDataChanged();
     } catch (err) {
-      setError(err.message);
+      toast.error(err.message);
     } finally {
       setSubmitting(false);
     }
   }
 
-  async function handleChangeStatus(order, nextStatus) {
-    setError('');
-    setNotice('');
+  async function executeStatusChange(order, nextStatus) {
+    setSubmitting(true);
     try {
       const res = await productionApi.updateWorkOrderStatus(order.id, nextStatus);
-      setNotice(res.message || '작업지시 상태가 변경되었습니다.');
+      toast.success(res.message || '작업지시 상태가 변경되었습니다.');
       if (selectedOrder && selectedOrder.id === order.id) {
-        setSelectedOrder(res.data);
+        if (nextStatus === 'COMPLETED' || nextStatus === 'CANCELED') {
+          setSelectedOrder(null);
+        } else {
+          setSelectedOrder(res.data);
+        }
       }
+      setPendingStatusChange(null);
       await loadWorkOrders();
+      notifyDataChanged();
     } catch (err) {
-      setError(err.message);
+      toast.error(err.message);
+    } finally {
+      setSubmitting(false);
     }
   }
 
-  async function handleRecordResult(e) {
+  function requestStatusChange(order, nextStatus) {
+    if (nextStatus === 'COMPLETED' || nextStatus === 'CANCELED') {
+      setPendingStatusChange({ order, nextStatus });
+    } else {
+      executeStatusChange(order, nextStatus);
+    }
+  }
+
+  function handleRecordResultSubmit(e) {
     e.preventDefault();
     if (!selectedOrder) return;
+    if (totalInput <= 0) {
+      toast.warning('양품 수량과 불량 수량의 합은 1 이상이어야 합니다.');
+      return;
+    }
+    setPendingResultSubmit({
+      order: selectedOrder,
+      goodQuantity: goodInput,
+      defectQuantity: defectInput,
+      workerName: resultForm.workerName,
+      remark: resultForm.remark,
+      willAutoComplete: selectedOrder.producedGoodQuantity + goodInput >= selectedOrder.targetQuantity,
+      bomRequirements,
+      hasBomShortage,
+    });
+  }
+
+  async function executeRecordResult() {
+    if (!pendingResultSubmit) return;
     setSubmitting(true);
-    setError('');
-    setNotice('');
     try {
-      const res = await productionApi.recordResult(selectedOrder.id, {
-        goodQuantity: Number(resultForm.goodQuantity),
-        defectQuantity: Number(resultForm.defectQuantity),
-        workerName: resultForm.workerName,
-        remark: resultForm.remark,
+      const res = await productionApi.recordResult(pendingResultSubmit.order.id, {
+        goodQuantity: pendingResultSubmit.goodQuantity,
+        defectQuantity: pendingResultSubmit.defectQuantity,
+        workerName: pendingResultSubmit.workerName,
+        remark: pendingResultSubmit.remark,
       });
-      setNotice(res.message || '생산실적이 등록되고 재고가 반영되었습니다.');
-      setResultForm({
+      toast.success(res.message || '생산실적이 등록되고 재고가 반영되었습니다.');
+      setPendingResultSubmit(null);
+      setResultForm((prev) => ({
         goodQuantity: '',
         defectQuantity: '0',
-        workerName: resultForm.workerName,
+        workerName: prev.workerName,
         remark: '',
-      });
+      }));
+
+      const [ordersRes] = await Promise.all([
+        productionApi.listWorkOrders({ status: filterStatus || undefined }),
+        loadResults(),
+      ]);
+      const updatedOrders = ordersRes.data || [];
+      setWorkOrders(updatedOrders);
+      notifyDataChanged();
+
       if (res.data?.workOrderStatus === 'COMPLETED') {
         setSelectedOrder(null);
+      } else {
+        const refreshedOrder = updatedOrders.find((wo) => wo.id === pendingResultSubmit.order.id);
+        if (refreshedOrder) {
+          setSelectedOrder(refreshedOrder);
+          loadBomPreviewData(refreshedOrder);
+        }
       }
-      await Promise.all([loadWorkOrders(), loadResults()]);
     } catch (err) {
-      setError(err.message);
+      setPendingResultSubmit(null);
+      toast.error(err.message);
     } finally {
       setSubmitting(false);
     }
@@ -144,9 +302,6 @@ export default function ProductionPage() {
 
   return (
     <div>
-      {error && <div className="alert alert-error">{error}</div>}
-      {notice && <div className="alert alert-success">{notice}</div>}
-
       <div className="card">
         <div className="card-header">
           <h3 className="card-title">신규 작업지시 등록</h3>
@@ -222,26 +377,46 @@ export default function ProductionPage() {
       </div>
 
       {selectedOrder && (
-        <div className="card" style={{ borderColor: '#93c5fd', backgroundColor: '#f8fbff' }}>
+        <div className="card" style={{ borderColor: '#60a5fa', backgroundColor: '#f8fbff' }}>
           <div className="card-header">
-            <h3 className="card-title">
-              생산실적 등록 — {selectedOrder.orderNumber} ({selectedOrder.itemName})
-            </h3>
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
-              onClick={() => setSelectedOrder(null)}
-            >
-              닫기
-            </button>
+            <div>
+              <h3 className="card-title">
+                생산실적 등록 — {selectedOrder.orderNumber} ({selectedOrder.itemName})
+              </h3>
+              <div className="meta-text" style={{ marginTop: 4 }}>
+                목표 {formatNumber(selectedOrder.targetQuantity)} {selectedOrder.unit} · 누적 양품{' '}
+                {formatNumber(selectedOrder.producedGoodQuantity)} {selectedOrder.unit} ·{' '}
+                <strong>
+                  잔여 목표 {formatNumber(remainingTarget)} {selectedOrder.unit}
+                </strong>
+              </div>
+            </div>
+            <div className="inline-actions">
+              {remainingTarget > 0 && (
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() =>
+                    setResultForm((prev) => ({
+                      ...prev,
+                      goodQuantity: String(remainingTarget),
+                    }))
+                  }
+                >
+                  잔여 수량({formatNumber(remainingTarget)}) 채우기
+                </button>
+              )}
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => setSelectedOrder(null)}
+              >
+                닫기
+              </button>
+            </div>
           </div>
-          <p style={{ marginTop: 0, fontSize: 13, color: '#475569' }}>
-            실적을 등록하면 <strong>BOM에 설정된 원재료가 (양품 + 불량) 기준으로 자동 차감</strong>되고,{' '}
-            <strong>완제품 재고가 양품 수량만큼 자동 증가</strong>합니다. 누적 양품이 목표 수량(
-            {formatNumber(selectedOrder.targetQuantity)} {selectedOrder.unit})에 도달하면 작업이 자동 완료됩니다.
-          </p>
 
-          <form className="form-grid" onSubmit={handleRecordResult}>
+          <form className="form-grid" onSubmit={handleRecordResultSubmit}>
             <div className="field">
               <label htmlFor="res-good">양품 수량 *</label>
               <input
@@ -250,6 +425,7 @@ export default function ProductionPage() {
                 min="0"
                 value={resultForm.goodQuantity}
                 onChange={(e) => setResultForm((p) => ({ ...p, goodQuantity: e.target.value }))}
+                placeholder={`예: ${remainingTarget || 10}`}
                 required
               />
             </div>
@@ -288,17 +464,96 @@ export default function ProductionPage() {
 
             <div className="form-actions">
               <button type="submit" className="btn btn-success" disabled={submitting}>
-                {submitting ? '반영 중...' : '실적 등록 및 재고 반영'}
+                실적 등록 확인
               </button>
             </div>
           </form>
+
+          {/* BOM 원재료 예상 소모량 실시간 미리보기 */}
+          <div className="bom-preview-box">
+            <div className="bom-preview-header">
+              <span className="bom-preview-title">
+                BOM 원재료 예상 소모량 미리보기 (총 생산 {formatNumber(totalInput)}{' '}
+                {selectedOrder.unit} 기준)
+              </span>
+              {bomPreviewLoading ? (
+                <span className="meta-text">BOM 및 재고 조회 중...</span>
+              ) : selectedOrderBoms.length === 0 ? (
+                <StatusBadge variant="neutral">등록된 BOM 없음 (완제품만 증가)</StatusBadge>
+              ) : hasBomShortage ? (
+                <StatusBadge variant="danger">
+                  <IconAlert size={13} /> 원재료 재고 부족 (등록 불가 예상)
+                </StatusBadge>
+              ) : (
+                <StatusBadge variant="success">
+                  <IconCheckCircle size={13} /> 원재료 재고 충분
+                </StatusBadge>
+              )}
+            </div>
+
+            {selectedOrderBoms.length > 0 && (
+              <div className="bom-preview-list">
+                {bomRequirements.map((req) => (
+                  <div
+                    key={req.id}
+                    className={`bom-preview-item ${req.shortage ? 'shortage' : ''}`}
+                  >
+                    <div>
+                      <div style={{ fontWeight: 700 }}>
+                        [{req.rawMaterialCode}] {req.rawMaterialName}
+                      </div>
+                      <div className="meta-text">
+                        단위 소요 {req.requiredQuantity} {req.rawMaterialUnit} · 현재고{' '}
+                        {formatNumber(req.available)} {req.rawMaterialUnit}
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div
+                        style={{
+                          fontWeight: 800,
+                          color: req.shortage ? '#b91c1c' : '#0f172a',
+                        }}
+                      >
+                        -{formatNumber(req.needed)} {req.rawMaterialUnit}
+                      </div>
+                      <div
+                        className="meta-text"
+                        style={{
+                          color: req.shortage ? '#b91c1c' : '#15803d',
+                          fontWeight: 700,
+                        }}
+                      >
+                        {req.shortage
+                          ? `부족 ${formatNumber(Math.abs(req.remainingAfter))} ${req.rawMaterialUnit}`
+                          : `잔여 ${formatNumber(req.remainingAfter)} ${req.rawMaterialUnit}`}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
 
       <div className="card">
         <div className="card-header">
-          <h3 className="card-title">작업지시 목록 ({workOrders.length}건)</h3>
-          <div className="filter-bar">
+          <h3 className="card-title">
+            작업지시 목록 ({filteredWorkOrders.length}
+            {filteredWorkOrders.length !== workOrders.length
+              ? ` / 전체 ${workOrders.length}`
+              : ''}
+            건)
+          </h3>
+
+          <SearchSortBar
+            search={search}
+            onSearchChange={setSearch}
+            searchPlaceholder="지시번호·품목코드·완제품명 검색"
+            sortValue={sortBy}
+            onSortChange={setSortBy}
+            sortOptions={SORT_OPTIONS}
+          >
             <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
               <option value="">전체 상태</option>
               <option value="WAITING">대기</option>
@@ -306,16 +561,22 @@ export default function ProductionPage() {
               <option value="COMPLETED">완료</option>
               <option value="CANCELED">취소</option>
             </select>
-            <button className="btn btn-secondary btn-sm" onClick={loadAll} disabled={loading}>
-              새로고침
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={loadAll}
+              disabled={loading}
+            >
+              <IconRefresh size={14} />
+              <span>새로고침</span>
             </button>
-          </div>
+          </SearchSortBar>
         </div>
 
         {loading ? (
-          <div className="empty-state">작업지시 목록을 불러오는 중...</div>
-        ) : workOrders.length === 0 ? (
-          <div className="empty-state">등록된 작업지시가 없습니다.</div>
+          <EmptyState loading message="작업지시 목록을 불러오는 중..." />
+        ) : filteredWorkOrders.length === 0 ? (
+          <EmptyState message="조건에 해당하는 작업지시가 없습니다." />
         ) : (
           <div className="table-wrap">
             <table>
@@ -333,11 +594,11 @@ export default function ProductionPage() {
                 </tr>
               </thead>
               <tbody>
-                {workOrders.map((wo) => {
+                {filteredWorkOrders.map((wo) => {
                   const canRecord = wo.status === 'WAITING' || wo.status === 'IN_PROGRESS';
                   return (
                     <tr key={wo.id}>
-                      <td style={{ fontWeight: 600 }}>{wo.orderNumber}</td>
+                      <td style={{ fontWeight: 700 }}>{wo.orderNumber}</td>
                       <td>
                         [{wo.itemCode}] {wo.itemName}
                       </td>
@@ -345,10 +606,13 @@ export default function ProductionPage() {
                       <td className="text-right">
                         {formatNumber(wo.targetQuantity)} {wo.unit}
                       </td>
-                      <td className="text-right" style={{ fontWeight: 600, color: '#16a34a' }}>
+                      <td className="text-right" style={{ fontWeight: 700, color: '#15803d' }}>
                         {formatNumber(wo.producedGoodQuantity)}
                       </td>
-                      <td className="text-right" style={{ color: wo.producedDefectQuantity > 0 ? '#dc2626' : '#64748b' }}>
+                      <td
+                        className="text-right"
+                        style={{ color: wo.producedDefectQuantity > 0 ? '#b91c1c' : '#64748b' }}
+                      >
                         {formatNumber(wo.producedDefectQuantity)}
                       </td>
                       <td>
@@ -373,7 +637,7 @@ export default function ProductionPage() {
                             <button
                               type="button"
                               className="btn btn-primary btn-sm"
-                              onClick={() => setSelectedOrder(wo)}
+                              onClick={() => selectOrderForResult(wo)}
                             >
                               실적 등록
                             </button>
@@ -382,7 +646,7 @@ export default function ProductionPage() {
                             <button
                               type="button"
                               className="btn btn-secondary btn-sm"
-                              onClick={() => handleChangeStatus(wo, 'IN_PROGRESS')}
+                              onClick={() => requestStatusChange(wo, 'IN_PROGRESS')}
                             >
                               시작
                             </button>
@@ -391,7 +655,7 @@ export default function ProductionPage() {
                             <button
                               type="button"
                               className="btn btn-secondary btn-sm"
-                              onClick={() => handleChangeStatus(wo, 'COMPLETED')}
+                              onClick={() => requestStatusChange(wo, 'COMPLETED')}
                             >
                               완료
                             </button>
@@ -402,7 +666,7 @@ export default function ProductionPage() {
                               <button
                                 type="button"
                                 className="btn btn-danger btn-sm"
-                                onClick={() => handleChangeStatus(wo, 'CANCELED')}
+                                onClick={() => requestStatusChange(wo, 'CANCELED')}
                               >
                                 취소
                               </button>
@@ -424,7 +688,7 @@ export default function ProductionPage() {
         </div>
 
         {results.length === 0 ? (
-          <div className="empty-state">등록된 생산실적이 없습니다.</div>
+          <EmptyState message="등록된 생산실적이 없습니다." />
         ) : (
           <div className="table-wrap">
             <table>
@@ -444,14 +708,17 @@ export default function ProductionPage() {
                 {results.map((r) => (
                   <tr key={r.id}>
                     <td>{formatDateTime(r.createdAt)}</td>
-                    <td>{r.orderNumber}</td>
+                    <td style={{ fontWeight: 700 }}>{r.orderNumber}</td>
                     <td>
                       [{r.itemCode}] {r.itemName}
                     </td>
-                    <td className="text-right" style={{ fontWeight: 700, color: '#16a34a' }}>
+                    <td className="text-right" style={{ fontWeight: 800, color: '#15803d' }}>
                       {formatNumber(r.goodQuantity)} {r.unit}
                     </td>
-                    <td className="text-right" style={{ color: r.defectQuantity > 0 ? '#dc2626' : '#64748b' }}>
+                    <td
+                      className="text-right"
+                      style={{ color: r.defectQuantity > 0 ? '#b91c1c' : '#64748b' }}
+                    >
                       {formatNumber(r.defectQuantity)}
                     </td>
                     <td className="text-right">{formatNumber(r.totalQuantity)}</td>
@@ -464,6 +731,83 @@ export default function ProductionPage() {
           </div>
         )}
       </div>
+
+      {/* 작업지시 완료/취소 확인 모달 */}
+      <ConfirmModal
+        open={Boolean(pendingStatusChange)}
+        title={
+          pendingStatusChange?.nextStatus === 'COMPLETED'
+            ? '작업지시 완료 확인'
+            : '작업지시 취소 확인'
+        }
+        message={
+          pendingStatusChange?.nextStatus === 'COMPLETED'
+            ? '이 작업지시를 완료 상태로 마감하시겠습니까?'
+            : '이 작업지시를 취소하시겠습니까?'
+        }
+        details={
+          pendingStatusChange
+            ? [
+                `작업지시: ${pendingStatusChange.order.orderNumber} (${pendingStatusChange.order.itemName})`,
+                `현재 누적 양품: ${formatNumber(
+                  pendingStatusChange.order.producedGoodQuantity
+                )} / 목표 ${formatNumber(pendingStatusChange.order.targetQuantity)} ${
+                  pendingStatusChange.order.unit
+                }`,
+                '완료 또는 취소된 작업지시는 다시 되돌리거나 추가 실적을 등록할 수 없습니다.',
+              ]
+            : []
+        }
+        confirmLabel={
+          pendingStatusChange?.nextStatus === 'COMPLETED' ? '작업 완료 처리' : '작업 취소'
+        }
+        tone={pendingStatusChange?.nextStatus === 'COMPLETED' ? 'warning' : 'danger'}
+        loading={submitting}
+        onConfirm={() =>
+          pendingStatusChange &&
+          executeStatusChange(pendingStatusChange.order, pendingStatusChange.nextStatus)
+        }
+        onCancel={() => setPendingStatusChange(null)}
+      />
+
+      {/* 생산실적 등록 및 재고 반영 확인 모달 */}
+      <ConfirmModal
+        open={Boolean(pendingResultSubmit)}
+        title="생산실적 등록 및 재고 반영 확인"
+        message="아래 내용으로 생산실적을 등록하고 원재료·완제품 재고를 반영하시겠습니까?"
+        details={
+          pendingResultSubmit
+            ? [
+                `작업지시: ${pendingResultSubmit.order.orderNumber} (${pendingResultSubmit.order.itemName})`,
+                `양품 +${formatNumber(pendingResultSubmit.goodQuantity)} ${
+                  pendingResultSubmit.order.unit
+                } (완제품 재고 증가) / 불량 ${formatNumber(pendingResultSubmit.defectQuantity)} ${
+                  pendingResultSubmit.order.unit
+                }`,
+                ...(pendingResultSubmit.bomRequirements.length > 0
+                  ? pendingResultSubmit.bomRequirements.map(
+                      (req) =>
+                        `원재료 차감: ${req.rawMaterialName} -${formatNumber(req.needed)} ${
+                          req.rawMaterialUnit
+                        } (${
+                          req.shortage
+                            ? `재고 부족! 현재 ${formatNumber(req.available)}`
+                            : `차감 후 ${formatNumber(req.remainingAfter)}`
+                        })`
+                    )
+                  : ['등록된 BOM 없음: 원재료 차감 없이 완제품 재고만 증가합니다.']),
+                ...(pendingResultSubmit.willAutoComplete
+                  ? ['목표 수량 달성으로 작업지시가 자동 완료(COMPLETED) 처리됩니다.']
+                  : []),
+              ]
+            : []
+        }
+        confirmLabel="실적 등록 실행"
+        tone={pendingResultSubmit?.hasBomShortage ? 'danger' : 'success'}
+        loading={submitting}
+        onConfirm={executeRecordResult}
+        onCancel={() => setPendingResultSubmit(null)}
+      />
     </div>
   );
 }

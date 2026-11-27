@@ -1,9 +1,22 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { inventoryApi, itemApi, partnerApi } from '../api/endpoints';
 import StatusBadge, { transactionTypeVariant } from '../components/StatusBadge';
-import { formatDateTime, formatNumber } from '../utils/format';
+import ConfirmModal from '../components/ui/ConfirmModal';
+import EmptyState from '../components/ui/EmptyState';
+import { IconRefresh } from '../components/ui/Icons';
+import SearchSortBar from '../components/ui/SearchSortBar';
+import { useToast } from '../context/ToastContext';
+import { formatDateTime, formatNumber, notifyDataChanged } from '../utils/format';
+
+const SORT_OPTIONS = [
+  { value: 'shortageFirst', label: '정렬: 안전재고 부족 우선' },
+  { value: 'qtyAsc', label: '정렬: 현재고 적은순' },
+  { value: 'qtyDesc', label: '정렬: 현재고 많은순' },
+  { value: 'codeAsc', label: '정렬: 품목코드순' },
+];
 
 export default function InventoryPage() {
+  const toast = useToast();
   const [activeTab, setActiveTab] = useState('inbound');
   const [inventories, setInventories] = useState([]);
   const [histories, setHistories] = useState([]);
@@ -12,6 +25,9 @@ export default function InventoryPage() {
 
   const [filterItemType, setFilterItemType] = useState('');
   const [belowSafetyOnly, setBelowSafetyOnly] = useState(false);
+  const [search, setSearch] = useState('');
+  const [sortBy, setSortBy] = useState('shortageFirst');
+
   const [historyItemId, setHistoryItemId] = useState('');
   const [historyTxType, setHistoryTxType] = useState('');
 
@@ -22,72 +38,145 @@ export default function InventoryPage() {
     targetQuantity: '',
     remark: '',
   });
+  const [pendingAdjust, setPendingAdjust] = useState(null);
 
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
 
-  async function loadMasterData() {
+  const loadMasterData = useCallback(async () => {
     const [itemRes, partnerRes] = await Promise.all([
       itemApi.list({ active: true }),
       partnerApi.list({ active: true }),
     ]);
     setActiveItems(itemRes.data || []);
     setActivePartners(partnerRes.data || []);
-  }
+  }, []);
 
-  async function loadInventories() {
+  const loadInventories = useCallback(async () => {
     const res = await inventoryApi.list({
       itemType: filterItemType || undefined,
       belowSafetyOnly: belowSafetyOnly ? true : undefined,
     });
     setInventories(res.data || []);
-  }
+  }, [filterItemType, belowSafetyOnly]);
 
-  async function loadHistories() {
+  const loadHistories = useCallback(async () => {
     const res = await inventoryApi.histories({
       itemId: historyItemId || undefined,
       transactionType: historyTxType || undefined,
     });
     setHistories(res.data || []);
-  }
+  }, [historyItemId, historyTxType]);
 
-  async function loadAll() {
+  const loadAll = useCallback(async () => {
     setLoading(true);
-    setError('');
     try {
       await Promise.all([loadMasterData(), loadInventories(), loadHistories()]);
     } catch (err) {
-      setError(err.message);
+      toast.error(err.message);
     } finally {
       setLoading(false);
     }
-  }
+  }, [loadMasterData, loadInventories, loadHistories, toast]);
 
   useEffect(() => {
     loadAll();
-  }, []);
+  }, [loadAll]);
 
   useEffect(() => {
-    loadInventories().catch((err) => setError(err.message));
-  }, [filterItemType, belowSafetyOnly]);
+    loadInventories().catch((err) => toast.error(err.message));
+  }, [loadInventories, toast]);
 
   useEffect(() => {
-    loadHistories().catch((err) => setError(err.message));
-  }, [historyItemId, historyTxType]);
+    loadHistories().catch((err) => toast.error(err.message));
+  }, [loadHistories, toast]);
+
+  const filteredInventories = useMemo(() => {
+    const keyword = search.trim().toLowerCase();
+    const list = keyword
+      ? inventories.filter(
+          (inv) =>
+            inv.itemCode.toLowerCase().includes(keyword) ||
+            inv.itemName.toLowerCase().includes(keyword) ||
+            (inv.spec && inv.spec.toLowerCase().includes(keyword))
+        )
+      : [...inventories];
+
+    switch (sortBy) {
+      case 'shortageFirst':
+        list.sort((a, b) => {
+          const aAlert = a.active && a.belowSafetyStock ? 0 : 1;
+          const bAlert = b.active && b.belowSafetyStock ? 0 : 1;
+          if (aAlert !== bAlert) return aAlert - bAlert;
+          return a.quantity - b.quantity;
+        });
+        break;
+      case 'qtyAsc':
+        list.sort((a, b) => a.quantity - b.quantity);
+        break;
+      case 'qtyDesc':
+        list.sort((a, b) => b.quantity - a.quantity);
+        break;
+      case 'codeAsc':
+        list.sort((a, b) => a.itemCode.localeCompare(b.itemCode));
+        break;
+      default:
+        break;
+    }
+    return list;
+  }, [inventories, search, sortBy]);
 
   function handleChange(e) {
     const { name, value } = e.target;
     setTxForm((prev) => ({ ...prev, [name]: value }));
   }
 
+  async function executeAdjust(adjustData) {
+    setSubmitting(true);
+    try {
+      const res = await inventoryApi.adjust({
+        itemId: adjustData.itemId,
+        targetQuantity: adjustData.targetQuantity,
+        remark: adjustData.remark,
+      });
+      toast.success(res.message || '재고 조정이 완료되었습니다.');
+      setPendingAdjust(null);
+      setTxForm((prev) => ({
+        ...prev,
+        targetQuantity: '',
+        remark: '',
+      }));
+      await Promise.all([loadInventories(), loadHistories()]);
+      notifyDataChanged();
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   async function handleTransaction(e) {
     e.preventDefault();
-    setSubmitting(true);
-    setError('');
-    setNotice('');
 
+    if (activeTab === 'adjust') {
+      const itemId = Number(txForm.itemId);
+      const targetQuantity = Number(txForm.targetQuantity);
+      const item = activeItems.find((i) => i.id === itemId);
+      const currentInv = inventories.find((inv) => inv.itemId === itemId);
+      const currentQty = currentInv ? currentInv.quantity : 0;
+      setPendingAdjust({
+        itemId,
+        itemLabel: item ? `[${item.itemCode}] ${item.itemName}` : `품목 #${itemId}`,
+        unit: item ? item.unit : '',
+        currentQty,
+        targetQuantity,
+        delta: targetQuantity - currentQty,
+        remark: txForm.remark.trim(),
+      });
+      return;
+    }
+
+    setSubmitting(true);
     try {
       let res;
       if (activeTab === 'inbound') {
@@ -97,31 +186,25 @@ export default function InventoryPage() {
           quantity: Number(txForm.quantity),
           remark: txForm.remark,
         });
-      } else if (activeTab === 'outbound') {
+      } else {
         res = await inventoryApi.outbound({
           itemId: Number(txForm.itemId),
           partnerId: txForm.partnerId ? Number(txForm.partnerId) : null,
           quantity: Number(txForm.quantity),
           remark: txForm.remark,
         });
-      } else {
-        res = await inventoryApi.adjust({
-          itemId: Number(txForm.itemId),
-          targetQuantity: Number(txForm.targetQuantity),
-          remark: txForm.remark,
-        });
       }
 
-      setNotice(res.message || '재고 처리가 완료되었습니다.');
+      toast.success(res.message || '재고 처리가 완료되었습니다.');
       setTxForm((prev) => ({
         ...prev,
         quantity: '',
-        targetQuantity: '',
         remark: '',
       }));
       await Promise.all([loadInventories(), loadHistories()]);
+      notifyDataChanged();
     } catch (err) {
-      setError(err.message);
+      toast.error(err.message);
     } finally {
       setSubmitting(false);
     }
@@ -129,9 +212,6 @@ export default function InventoryPage() {
 
   return (
     <div>
-      {error && <div className="alert alert-error">{error}</div>}
-      {notice && <div className="alert alert-success">{notice}</div>}
-
       <div className="card">
         <div className="card-header">
           <h3 className="card-title">재고 입출고 · 수량 조정</h3>
@@ -253,7 +333,7 @@ export default function InventoryPage() {
                 ? '입고 등록'
                 : activeTab === 'outbound'
                 ? '출고 등록'
-                : '재고 조정'}
+                : '재고 조정 확인'}
             </button>
           </div>
         </form>
@@ -261,8 +341,22 @@ export default function InventoryPage() {
 
       <div className="card">
         <div className="card-header">
-          <h3 className="card-title">현재고 현황 ({inventories.length}건)</h3>
-          <div className="filter-bar">
+          <h3 className="card-title">
+            현재고 현황 ({filteredInventories.length}
+            {filteredInventories.length !== inventories.length
+              ? ` / 전체 ${inventories.length}`
+              : ''}
+            건)
+          </h3>
+
+          <SearchSortBar
+            search={search}
+            onSearchChange={setSearch}
+            searchPlaceholder="품목코드·품목명·규격 검색"
+            sortValue={sortBy}
+            onSortChange={setSortBy}
+            sortOptions={SORT_OPTIONS}
+          >
             <select value={filterItemType} onChange={(e) => setFilterItemType(e.target.value)}>
               <option value="">전체 구분</option>
               <option value="RAW_MATERIAL">원재료</option>
@@ -274,18 +368,24 @@ export default function InventoryPage() {
                 checked={belowSafetyOnly}
                 onChange={(e) => setBelowSafetyOnly(e.target.checked)}
               />
-              안전재고 미만만 보기
+              안전재고 미만만
             </label>
-            <button className="btn btn-secondary btn-sm" onClick={loadAll} disabled={loading}>
-              새로고침
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={loadAll}
+              disabled={loading}
+            >
+              <IconRefresh size={14} />
+              <span>새로고침</span>
             </button>
-          </div>
+          </SearchSortBar>
         </div>
 
         {loading ? (
-          <div className="empty-state">현재고 정보를 불러오는 중...</div>
-        ) : inventories.length === 0 ? (
-          <div className="empty-state">조건에 해당하는 재고 정보가 없습니다.</div>
+          <EmptyState loading message="현재고 정보를 불러오는 중..." />
+        ) : filteredInventories.length === 0 ? (
+          <EmptyState message="조건에 해당하는 재고 정보가 없습니다." />
         ) : (
           <div className="table-wrap">
             <table>
@@ -302,7 +402,7 @@ export default function InventoryPage() {
                 </tr>
               </thead>
               <tbody>
-                {inventories.map((inv) => (
+                {filteredInventories.map((inv) => (
                   <tr
                     key={inv.itemId}
                     className={
@@ -313,7 +413,7 @@ export default function InventoryPage() {
                         : ''
                     }
                   >
-                    <td>{inv.itemCode}</td>
+                    <td style={{ fontWeight: 700 }}>{inv.itemCode}</td>
                     <td style={{ fontWeight: 600 }}>{inv.itemName}</td>
                     <td>
                       <StatusBadge variant={inv.itemType === 'RAW_MATERIAL' ? 'warning' : 'info'}>
@@ -324,8 +424,8 @@ export default function InventoryPage() {
                     <td
                       className="text-right"
                       style={{
-                        fontWeight: 700,
-                        color: inv.belowSafetyStock && inv.active ? '#dc2626' : '#0f172a',
+                        fontWeight: 800,
+                        color: inv.belowSafetyStock && inv.active ? '#b91c1c' : '#0f172a',
                       }}
                     >
                       {formatNumber(inv.quantity)} {inv.unit}
@@ -375,7 +475,7 @@ export default function InventoryPage() {
         </div>
 
         {histories.length === 0 ? (
-          <div className="empty-state">수불 이력이 없습니다.</div>
+          <EmptyState message="수불 이력이 없습니다." />
         ) : (
           <div className="table-wrap">
             <table>
@@ -408,14 +508,14 @@ export default function InventoryPage() {
                     <td
                       className="text-right"
                       style={{
-                        fontWeight: 700,
-                        color: h.changeQuantity >= 0 ? '#16a34a' : '#dc2626',
+                        fontWeight: 800,
+                        color: h.changeQuantity >= 0 ? '#15803d' : '#b91c1c',
                       }}
                     >
                       {h.changeQuantity >= 0 ? '+' : ''}
                       {formatNumber(h.changeQuantity)} {h.unit}
                     </td>
-                    <td className="text-right" style={{ fontWeight: 600 }}>
+                    <td className="text-right" style={{ fontWeight: 700 }}>
                       {formatNumber(h.afterQuantity)} {h.unit}
                     </td>
                     <td>{h.remark || '-'}</td>
@@ -426,6 +526,30 @@ export default function InventoryPage() {
           </div>
         )}
       </div>
+
+      <ConfirmModal
+        open={Boolean(pendingAdjust)}
+        title="재고 실사 조정 확인"
+        message="현재 재고 수량을 실사 수량으로 직접 조정하시겠습니까?"
+        details={
+          pendingAdjust
+            ? [
+                `대상 품목: ${pendingAdjust.itemLabel}`,
+                `현재고 ${formatNumber(pendingAdjust.currentQty)} ${pendingAdjust.unit} → 조정 후 ${formatNumber(
+                  pendingAdjust.targetQuantity
+                )} ${pendingAdjust.unit} (차이 ${pendingAdjust.delta >= 0 ? '+' : ''}${formatNumber(
+                  pendingAdjust.delta
+                )} ${pendingAdjust.unit})`,
+                `조정 사유: ${pendingAdjust.remark}`,
+              ]
+            : []
+        }
+        confirmLabel="조정 반영"
+        tone="warning"
+        loading={submitting}
+        onConfirm={() => pendingAdjust && executeAdjust(pendingAdjust)}
+        onCancel={() => setPendingAdjust(null)}
+      />
     </div>
   );
 }

@@ -1,7 +1,12 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { itemApi } from '../api/endpoints';
 import StatusBadge from '../components/StatusBadge';
-import { formatNumber } from '../utils/format';
+import ConfirmModal from '../components/ui/ConfirmModal';
+import EmptyState from '../components/ui/EmptyState';
+import { IconRefresh } from '../components/ui/Icons';
+import SearchSortBar from '../components/ui/SearchSortBar';
+import { useToast } from '../context/ToastContext';
+import { formatNumber, notifyDataChanged } from '../utils/format';
 
 const INITIAL_FORM = {
   itemCode: '',
@@ -12,20 +17,29 @@ const INITIAL_FORM = {
   safetyStock: '0',
 };
 
+const SORT_OPTIONS = [
+  { value: 'latest', label: '정렬: 최신 등록순' },
+  { value: 'codeAsc', label: '정렬: 품목코드순' },
+  { value: 'nameAsc', label: '정렬: 품목명순' },
+  { value: 'safetyDesc', label: '정렬: 안전재고 많은순' },
+];
+
 export default function ItemsPage() {
+  const toast = useToast();
   const [items, setItems] = useState([]);
   const [filterType, setFilterType] = useState('');
   const [filterActive, setFilterActive] = useState('');
+  const [search, setSearch] = useState('');
+  const [sortBy, setSortBy] = useState('latest');
+
   const [form, setForm] = useState(INITIAL_FORM);
   const [editingId, setEditingId] = useState(null);
+  const [confirmItem, setConfirmItem] = useState(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
 
-  async function loadItems() {
+  const loadItems = useCallback(async () => {
     setLoading(true);
-    setError('');
     try {
       const res = await itemApi.list({
         itemType: filterType || undefined,
@@ -33,15 +47,42 @@ export default function ItemsPage() {
       });
       setItems(res.data || []);
     } catch (err) {
-      setError(err.message);
+      toast.error(err.message);
     } finally {
       setLoading(false);
     }
-  }
+  }, [filterType, filterActive, toast]);
 
   useEffect(() => {
     loadItems();
-  }, [filterType, filterActive]);
+  }, [loadItems]);
+
+  const filteredItems = useMemo(() => {
+    const keyword = search.trim().toLowerCase();
+    const list = keyword
+      ? items.filter(
+          (item) =>
+            item.itemCode.toLowerCase().includes(keyword) ||
+            item.itemName.toLowerCase().includes(keyword) ||
+            (item.spec && item.spec.toLowerCase().includes(keyword))
+        )
+      : [...items];
+
+    switch (sortBy) {
+      case 'codeAsc':
+        list.sort((a, b) => a.itemCode.localeCompare(b.itemCode));
+        break;
+      case 'nameAsc':
+        list.sort((a, b) => a.itemName.localeCompare(b.itemName, 'ko'));
+        break;
+      case 'safetyDesc':
+        list.sort((a, b) => b.safetyStock - a.safetyStock);
+        break;
+      default:
+        break;
+    }
+    return list;
+  }, [items, search, sortBy]);
 
   function handleChange(e) {
     const { name, value } = e.target;
@@ -58,8 +99,7 @@ export default function ItemsPage() {
       unit: item.unit,
       safetyStock: String(item.safetyStock),
     });
-    setNotice('');
-    setError('');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
   function cancelEdit() {
@@ -70,9 +110,6 @@ export default function ItemsPage() {
   async function handleSubmit(e) {
     e.preventDefault();
     setSubmitting(true);
-    setError('');
-    setNotice('');
-
     try {
       if (editingId) {
         const res = await itemApi.update(editingId, {
@@ -82,7 +119,7 @@ export default function ItemsPage() {
           unit: form.unit,
           safetyStock: Number(form.safetyStock),
         });
-        setNotice(res.message || '품목 정보가 수정되었습니다.');
+        toast.success(res.message || '품목 정보가 수정되었습니다.');
         cancelEdit();
       } else {
         const res = await itemApi.create({
@@ -93,37 +130,46 @@ export default function ItemsPage() {
           unit: form.unit,
           safetyStock: Number(form.safetyStock),
         });
-        setNotice(res.message || '품목이 등록되었습니다.');
+        toast.success(res.message || '품목이 등록되었습니다.');
         setForm(INITIAL_FORM);
       }
       await loadItems();
+      notifyDataChanged();
     } catch (err) {
-      setError(err.message);
+      toast.error(err.message);
     } finally {
       setSubmitting(false);
     }
   }
 
-  async function toggleStatus(item) {
-    setError('');
-    setNotice('');
+  async function executeToggleStatus(item) {
+    setSubmitting(true);
     try {
       const res = await itemApi.updateStatus(item.id, !item.active);
-      setNotice(res.message || '품목 상태가 변경되었습니다.');
+      toast.success(res.message || '품목 상태가 변경되었습니다.');
+      setConfirmItem(null);
       await loadItems();
+      notifyDataChanged();
     } catch (err) {
-      setError(err.message);
+      toast.error(err.message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  function requestToggleStatus(item) {
+    if (item.active) {
+      setConfirmItem(item);
+    } else {
+      executeToggleStatus(item);
     }
   }
 
   return (
     <div>
-      {error && <div className="alert alert-error">{error}</div>}
-      {notice && <div className="alert alert-success">{notice}</div>}
-
       <div className="card">
         <div className="card-header">
-          <h3 className="card-title">{editingId ? '품목 수정' : '신규 품목 등록'}</h3>
+          <h3 className="card-title">{editingId ? '품목 정보 수정' : '신규 품목 등록'}</h3>
           {editingId && (
             <button type="button" className="btn btn-secondary btn-sm" onClick={cancelEdit}>
               수정 취소
@@ -211,8 +257,19 @@ export default function ItemsPage() {
 
       <div className="card">
         <div className="card-header">
-          <h3 className="card-title">품목 목록 ({items.length}건)</h3>
-          <div className="filter-bar">
+          <h3 className="card-title">
+            품목 목록 ({filteredItems.length}
+            {filteredItems.length !== items.length ? ` / 전체 ${items.length}` : ''}건)
+          </h3>
+
+          <SearchSortBar
+            search={search}
+            onSearchChange={setSearch}
+            searchPlaceholder="품목코드·품목명·규격 검색"
+            sortValue={sortBy}
+            onSortChange={setSortBy}
+            sortOptions={SORT_OPTIONS}
+          >
             <select value={filterType} onChange={(e) => setFilterType(e.target.value)}>
               <option value="">전체 구분</option>
               <option value="RAW_MATERIAL">원재료</option>
@@ -223,16 +280,22 @@ export default function ItemsPage() {
               <option value="true">사용 중</option>
               <option value="false">비활성</option>
             </select>
-            <button className="btn btn-secondary btn-sm" onClick={loadItems} disabled={loading}>
-              새로고침
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={loadItems}
+              disabled={loading}
+            >
+              <IconRefresh size={14} />
+              <span>새로고침</span>
             </button>
-          </div>
+          </SearchSortBar>
         </div>
 
         {loading ? (
-          <div className="empty-state">품목 목록을 불러오는 중...</div>
-        ) : items.length === 0 ? (
-          <div className="empty-state">등록된 품목이 없습니다. 위 폼에서 첫 품목을 등록해 보세요.</div>
+          <EmptyState loading message="품목 목록을 불러오는 중..." />
+        ) : filteredItems.length === 0 ? (
+          <EmptyState message="조건에 맞는 품목이 없습니다." />
         ) : (
           <div className="table-wrap">
             <table>
@@ -249,9 +312,9 @@ export default function ItemsPage() {
                 </tr>
               </thead>
               <tbody>
-                {items.map((item) => (
+                {filteredItems.map((item) => (
                   <tr key={item.id} className={!item.active ? 'row-inactive' : ''}>
-                    <td>{item.itemCode}</td>
+                    <td style={{ fontWeight: 700 }}>{item.itemCode}</td>
                     <td style={{ fontWeight: 600 }}>{item.itemName}</td>
                     <td>
                       <StatusBadge variant={item.itemType === 'RAW_MATERIAL' ? 'warning' : 'info'}>
@@ -278,7 +341,7 @@ export default function ItemsPage() {
                         <button
                           type="button"
                           className={`btn btn-sm ${item.active ? 'btn-danger' : 'btn-secondary'}`}
-                          onClick={() => toggleStatus(item)}
+                          onClick={() => requestToggleStatus(item)}
                         >
                           {item.active ? '비활성화' : '활성화'}
                         </button>
@@ -291,6 +354,26 @@ export default function ItemsPage() {
           </div>
         )}
       </div>
+
+      <ConfirmModal
+        open={Boolean(confirmItem)}
+        title="품목 비활성화 확인"
+        message="이 품목을 비활성화하시겠습니까?"
+        details={
+          confirmItem
+            ? [
+                `품목: [${confirmItem.itemCode}] ${confirmItem.itemName} (${confirmItem.itemTypeDescription})`,
+                '비활성화하면 신규 작업지시, BOM 등록, 재고 입출고 대상에서 제외됩니다.',
+                '기존 거래/수불 이력은 보존되며 언제든 다시 활성화할 수 있습니다.',
+              ]
+            : []
+        }
+        confirmLabel="비활성화"
+        tone="danger"
+        loading={submitting}
+        onConfirm={() => confirmItem && executeToggleStatus(confirmItem)}
+        onCancel={() => setConfirmItem(null)}
+      />
     </div>
   );
 }

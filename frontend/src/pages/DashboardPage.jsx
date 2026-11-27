@@ -1,38 +1,65 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { dashboardApi } from '../api/endpoints';
 import StatusBadge, { workOrderStatusVariant } from '../components/StatusBadge';
-import { formatNumber, getTodayIso } from '../utils/format';
+import EmptyState from '../components/ui/EmptyState';
+import {
+  IconAlert,
+  IconCheckCircle,
+  IconClipboard,
+  IconRefresh,
+  IconWarehouse,
+} from '../components/ui/Icons';
+import KpiCard from '../components/ui/KpiCard';
+import { useToast } from '../context/ToastContext';
+import { formatNumber, formatTimeOnly, getTodayIso } from '../utils/format';
 
 export default function DashboardPage() {
+  const toast = useToast();
   const [selectedDate, setSelectedDate] = useState(getTodayIso());
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [lastUpdated, setLastUpdated] = useState(null);
   const [summary, setSummary] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
 
-  async function loadSummary(dateValue = selectedDate) {
-    setLoading(true);
-    setError('');
-    try {
-      const res = await dashboardApi.getSummary(dateValue);
-      setSummary(res.data);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  }
+  const loadSummary = useCallback(
+    async (dateValue = selectedDate, silent = false) => {
+      if (!silent) setLoading(true);
+      try {
+        const res = await dashboardApi.getSummary(dateValue);
+        setSummary(res.data);
+        setLastUpdated(new Date());
+      } catch (err) {
+        toast.error(err.message);
+      } finally {
+        if (!silent) setLoading(false);
+      }
+    },
+    [selectedDate, toast]
+  );
 
   useEffect(() => {
     loadSummary(selectedDate);
-  }, [selectedDate]);
+  }, [selectedDate, loadSummary]);
+
+  useEffect(() => {
+    if (!autoRefresh) return undefined;
+    const timer = window.setInterval(() => {
+      loadSummary(selectedDate, true);
+    }, 30000);
+    return () => window.clearInterval(timer);
+  }, [autoRefresh, selectedDate, loadSummary]);
+
+  const hasHighDefect = summary && summary.todayDefectRate >= 5.0;
+  const hasLowStock = summary && summary.belowSafetyStockCount > 0;
+  const hasAnomaly = hasHighDefect || hasLowStock;
 
   return (
     <div>
       <div className="card" style={{ padding: '14px 20px' }}>
         <div className="card-header" style={{ marginBottom: 0 }}>
           <div className="filter-bar">
-            <label htmlFor="dashboard-date" style={{ fontSize: 13, fontWeight: 600 }}>
+            <label htmlFor="dashboard-date" style={{ fontSize: 13.5, fontWeight: 700 }}>
               집계 기준일
             </label>
             <input
@@ -41,65 +68,115 @@ export default function DashboardPage() {
               value={selectedDate}
               onChange={(e) => setSelectedDate(e.target.value)}
             />
+            <label className="checkbox-label">
+              <input
+                type="checkbox"
+                checked={autoRefresh}
+                onChange={(e) => setAutoRefresh(e.target.checked)}
+              />
+              30초 자동 갱신
+            </label>
           </div>
-          <button className="btn btn-secondary" onClick={() => loadSummary(selectedDate)} disabled={loading}>
-            {loading ? '조회 중...' : '새로고침'}
-          </button>
+
+          <div className="filter-bar">
+            {lastUpdated && (
+              <span className="meta-text">최근 갱신: {formatTimeOnly(lastUpdated)}</span>
+            )}
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={() => loadSummary(selectedDate)}
+              disabled={loading}
+            >
+              <IconRefresh size={14} />
+              <span>{loading ? '조회 중...' : '새로고침'}</span>
+            </button>
+          </div>
         </div>
       </div>
 
-      {error && <div className="alert alert-error">{error}</div>}
+      {hasAnomaly && (
+        <div className="anomaly-banner" role="alert">
+          <div className="anomaly-banner-main">
+            <IconAlert size={20} />
+            <span>
+              이상 징후 감지:
+              {hasLowStock && ` 안전재고 미만 품목 ${summary.belowSafetyStockCount}건`}
+              {hasLowStock && hasHighDefect && ' ·'}
+              {hasHighDefect && ` 기준일 불량률 주의(${summary.todayDefectRate.toFixed(1)}%)`}
+            </span>
+          </div>
+          <div className="anomaly-banner-actions">
+            {hasLowStock && (
+              <Link to="/inventories" className="btn btn-danger btn-sm">
+                재고 보충(입고) 바로가기
+              </Link>
+            )}
+            {hasHighDefect && (
+              <Link to="/production" className="btn btn-secondary btn-sm">
+                생산실적 점검
+              </Link>
+            )}
+          </div>
+        </div>
+      )}
 
       {loading && !summary ? (
-        <div className="card empty-state">대시보드 데이터를 불러오는 중입니다...</div>
+        <div className="card">
+          <EmptyState loading message="대시보드 데이터를 불러오는 중입니다..." />
+        </div>
       ) : summary ? (
         <>
           <section className="kpi-grid">
-            <div className="kpi-card">
-              <div className="kpi-label">진행 중 작업지시</div>
-              <div className="kpi-value primary">{formatNumber(summary.inProgressWorkOrderCount)}건</div>
-              <div className="kpi-sub">
-                대기 {formatNumber(summary.waitingWorkOrderCount)}건 · 완료{' '}
-                {formatNumber(summary.completedWorkOrderCount)}건
-              </div>
-            </div>
+            <KpiCard
+              label="진행 중 작업지시"
+              value={`${formatNumber(summary.inProgressWorkOrderCount)}건`}
+              sub={`대기 ${formatNumber(summary.waitingWorkOrderCount)}건 · 완료 ${formatNumber(
+                summary.completedWorkOrderCount
+              )}건`}
+              tone="primary"
+              icon={<IconClipboard size={18} />}
+            />
 
-            <div className="kpi-card">
-              <div className="kpi-label">기준일 총 생산량</div>
-              <div className="kpi-value">{formatNumber(summary.todayTotalQuantity)}</div>
-              <div className="kpi-sub">
-                양품 {formatNumber(summary.todayGoodQuantity)} / 불량{' '}
-                {formatNumber(summary.todayDefectQuantity)} (실적 {summary.todayResultCount}건)
-              </div>
-            </div>
+            <KpiCard
+              label="기준일 총 생산량"
+              value={formatNumber(summary.todayTotalQuantity)}
+              sub={`양품 ${formatNumber(summary.todayGoodQuantity)} / 불량 ${formatNumber(
+                summary.todayDefectQuantity
+              )} (실적 ${summary.todayResultCount}건)`}
+              tone="success"
+              icon={<IconCheckCircle size={18} />}
+            />
 
-            <div className="kpi-card">
-              <div className="kpi-label">기준일 불량률</div>
-              <div className={`kpi-value ${summary.todayDefectRate >= 5 ? 'danger' : ''}`}>
-                {summary.todayDefectRate.toFixed(1)}%
-              </div>
-              <div className="kpi-sub">기준일: {summary.baseDate}</div>
-            </div>
+            <KpiCard
+              label="기준일 불량률"
+              value={`${summary.todayDefectRate.toFixed(1)}%`}
+              sub={hasHighDefect ? '주의 기준(5.0%) 초과' : `기준일: ${summary.baseDate} (양호)`}
+              tone={hasHighDefect ? 'danger' : 'default'}
+              icon={<IconAlert size={18} />}
+            />
 
-            <div className="kpi-card">
-              <div className="kpi-label">안전재고 미만 품목</div>
-              <div className={`kpi-value ${summary.belowSafetyStockCount > 0 ? 'danger' : ''}`}>
-                {formatNumber(summary.belowSafetyStockCount)}건
-              </div>
-              <div className="kpi-sub">활성 품목 기준 실시간 재고 경고</div>
-            </div>
+            <KpiCard
+              label="안전재고 미만 품목"
+              value={`${formatNumber(summary.belowSafetyStockCount)}건`}
+              sub={hasLowStock ? '즉시 발주/입고 확인 필요' : '모든 활성 품목 안전재고 충족'}
+              tone={hasLowStock ? 'danger' : 'success'}
+              icon={<IconWarehouse size={18} />}
+            />
           </section>
 
           <section className="panel-grid">
             <div className="card">
               <div className="card-header">
-                <h3 className="card-title">진행 중 작업지시 ({summary.inProgressWorkOrders.length}건)</h3>
+                <h3 className="card-title">
+                  진행 중 작업지시 ({summary.inProgressWorkOrders.length}건)
+                </h3>
                 <Link to="/production" className="btn btn-secondary btn-sm">
                   생산 관리로 이동
                 </Link>
               </div>
               {summary.inProgressWorkOrders.length === 0 ? (
-                <div className="empty-state">현재 진행 중인 작업지시가 없습니다.</div>
+                <EmptyState message="현재 진행 중인 작업지시가 없습니다." />
               ) : (
                 <div className="table-wrap">
                   <table>
@@ -115,12 +192,14 @@ export default function DashboardPage() {
                     <tbody>
                       {summary.inProgressWorkOrders.map((wo) => (
                         <tr key={wo.id}>
-                          <td>{wo.orderNumber}</td>
+                          <td style={{ fontWeight: 700 }}>{wo.orderNumber}</td>
                           <td>
-                            {wo.itemName} <span style={{ color: '#64748b' }}>({wo.itemCode})</span>
+                            {wo.itemName}{' '}
+                            <span style={{ color: '#64748b' }}>({wo.itemCode})</span>
                           </td>
                           <td className="text-right">
-                            {formatNumber(wo.producedGoodQuantity)} / {formatNumber(wo.targetQuantity)} {wo.unit}
+                            {formatNumber(wo.producedGoodQuantity)} /{' '}
+                            {formatNumber(wo.targetQuantity)} {wo.unit}
                           </td>
                           <td>
                             <div className="progress-wrap">
@@ -148,13 +227,15 @@ export default function DashboardPage() {
 
             <div className="card">
               <div className="card-header">
-                <h3 className="card-title">안전재고 미만 경고 ({summary.belowSafetyStockItems.length}건)</h3>
+                <h3 className="card-title">
+                  안전재고 미만 경고 ({summary.belowSafetyStockItems.length}건)
+                </h3>
                 <Link to="/inventories" className="btn btn-secondary btn-sm">
                   재고 · 입고로 이동
                 </Link>
               </div>
               {summary.belowSafetyStockItems.length === 0 ? (
-                <div className="empty-state">안전재고 미만 품목이 없습니다.</div>
+                <EmptyState message="안전재고 미만 품목이 없습니다." />
               ) : (
                 <div className="table-wrap">
                   <table>
@@ -171,20 +252,22 @@ export default function DashboardPage() {
                     <tbody>
                       {summary.belowSafetyStockItems.map((inv) => (
                         <tr key={inv.itemId} className="row-warning">
-                          <td>{inv.itemCode}</td>
+                          <td style={{ fontWeight: 700 }}>{inv.itemCode}</td>
                           <td>{inv.itemName}</td>
                           <td>
-                            <StatusBadge variant={inv.itemType === 'RAW_MATERIAL' ? 'warning' : 'info'}>
+                            <StatusBadge
+                              variant={inv.itemType === 'RAW_MATERIAL' ? 'warning' : 'info'}
+                            >
                               {inv.itemTypeDescription}
                             </StatusBadge>
                           </td>
-                          <td className="text-right" style={{ fontWeight: 700, color: '#dc2626' }}>
+                          <td className="text-right" style={{ fontWeight: 800, color: '#b91c1c' }}>
                             {formatNumber(inv.quantity)} {inv.unit}
                           </td>
                           <td className="text-right">
                             {formatNumber(inv.safetyStock)} {inv.unit}
                           </td>
-                          <td className="text-right" style={{ fontWeight: 700, color: '#d97706' }}>
+                          <td className="text-right" style={{ fontWeight: 800, color: '#b45309' }}>
                             -{formatNumber(inv.safetyStock - inv.quantity)} {inv.unit}
                           </td>
                         </tr>

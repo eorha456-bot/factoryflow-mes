@@ -1,12 +1,26 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { bomApi, itemApi } from '../api/endpoints';
+import ConfirmModal from '../components/ui/ConfirmModal';
+import EmptyState from '../components/ui/EmptyState';
+import { IconRefresh } from '../components/ui/Icons';
+import SearchSortBar from '../components/ui/SearchSortBar';
+import { useToast } from '../context/ToastContext';
 import { formatNumber } from '../utils/format';
 
+const SORT_OPTIONS = [
+  { value: 'latest', label: '정렬: 기본순' },
+  { value: 'finishedAsc', label: '정렬: 완제품명순' },
+  { value: 'qtyDesc', label: '정렬: 소요량 많은순' },
+];
+
 export default function BomPage() {
+  const toast = useToast();
   const [boms, setBoms] = useState([]);
   const [finishedItems, setFinishedItems] = useState([]);
   const [rawMaterials, setRawMaterials] = useState([]);
   const [filterFinishedId, setFilterFinishedId] = useState('');
+  const [search, setSearch] = useState('');
+  const [sortBy, setSortBy] = useState('latest');
 
   const [finishedItemId, setFinishedItemId] = useState('');
   const [rawMaterialId, setRawMaterialId] = useState('');
@@ -14,97 +28,112 @@ export default function BomPage() {
 
   const [editingBomId, setEditingBomId] = useState(null);
   const [editingQty, setEditingQty] = useState('1');
+  const [deletingBom, setDeletingBom] = useState(null);
 
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
-
-  async function loadItems() {
-    const [fgRes, rmRes] = await Promise.all([
-      itemApi.list({ itemType: 'FINISHED_GOOD', active: true }),
-      itemApi.list({ itemType: 'RAW_MATERIAL', active: true }),
-    ]);
-    setFinishedItems(fgRes.data || []);
-    setRawMaterials(rmRes.data || []);
-  }
-
-  async function loadBoms(selectedFinishedId = filterFinishedId) {
-    setLoading(true);
-    setError('');
-    try {
-      const res = await bomApi.list(selectedFinishedId || undefined);
-      setBoms(res.data || []);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  }
 
   useEffect(() => {
-    loadItems().catch((err) => setError(err.message));
-  }, []);
+    Promise.all([
+      itemApi.list({ itemType: 'FINISHED_GOOD', active: true }),
+      itemApi.list({ itemType: 'RAW_MATERIAL', active: true }),
+    ])
+      .then(([fgRes, rmRes]) => {
+        setFinishedItems(fgRes.data || []);
+        setRawMaterials(rmRes.data || []);
+      })
+      .catch((err) => toast.error(err.message));
+  }, [toast]);
+
+  const loadBoms = useCallback(
+    async (selectedFinishedId = filterFinishedId) => {
+      setLoading(true);
+      try {
+        const res = await bomApi.list(selectedFinishedId || undefined);
+        setBoms(res.data || []);
+      } catch (err) {
+        toast.error(err.message);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [filterFinishedId, toast]
+  );
 
   useEffect(() => {
     loadBoms(filterFinishedId);
-  }, [filterFinishedId]);
+  }, [filterFinishedId, loadBoms]);
+
+  const filteredBoms = useMemo(() => {
+    const keyword = search.trim().toLowerCase();
+    const list = keyword
+      ? boms.filter(
+          (b) =>
+            b.finishedItemCode.toLowerCase().includes(keyword) ||
+            b.finishedItemName.toLowerCase().includes(keyword) ||
+            b.rawMaterialCode.toLowerCase().includes(keyword) ||
+            b.rawMaterialName.toLowerCase().includes(keyword)
+        )
+      : [...boms];
+
+    if (sortBy === 'finishedAsc') {
+      list.sort((a, b) => a.finishedItemName.localeCompare(b.finishedItemName, 'ko'));
+    } else if (sortBy === 'qtyDesc') {
+      list.sort((a, b) => b.requiredQuantity - a.requiredQuantity);
+    }
+    return list;
+  }, [boms, search, sortBy]);
 
   async function handleCreate(e) {
     e.preventDefault();
     setSubmitting(true);
-    setError('');
-    setNotice('');
     try {
       const res = await bomApi.create({
         finishedItemId: Number(finishedItemId),
         rawMaterialId: Number(rawMaterialId),
         requiredQuantity: Number(requiredQuantity),
       });
-      setNotice(res.message || 'BOM이 등록되었습니다.');
+      toast.success(res.message || 'BOM이 등록되었습니다.');
       setRawMaterialId('');
       setRequiredQuantity('1');
       await loadBoms();
     } catch (err) {
-      setError(err.message);
+      toast.error(err.message);
     } finally {
       setSubmitting(false);
     }
   }
 
   async function handleUpdate(bomId) {
-    setError('');
-    setNotice('');
+    setSubmitting(true);
     try {
       const res = await bomApi.update(bomId, Number(editingQty));
-      setNotice(res.message || '소요 수량이 수정되었습니다.');
+      toast.success(res.message || '소요 수량이 수정되었습니다.');
       setEditingBomId(null);
       await loadBoms();
     } catch (err) {
-      setError(err.message);
+      toast.error(err.message);
+    } finally {
+      setSubmitting(false);
     }
   }
 
-  async function handleDelete(bom) {
-    if (!window.confirm(`${bom.finishedItemName} - ${bom.rawMaterialName} BOM을 삭제할까요?`)) {
-      return;
-    }
-    setError('');
-    setNotice('');
+  async function executeDelete(bom) {
+    setSubmitting(true);
     try {
       const res = await bomApi.remove(bom.id);
-      setNotice(res.message || 'BOM이 삭제되었습니다.');
+      toast.success(res.message || 'BOM이 삭제되었습니다.');
+      setDeletingBom(null);
       await loadBoms();
     } catch (err) {
-      setError(err.message);
+      toast.error(err.message);
+    } finally {
+      setSubmitting(false);
     }
   }
 
   return (
     <div>
-      {error && <div className="alert alert-error">{error}</div>}
-      {notice && <div className="alert alert-success">{notice}</div>}
-
       <div className="card">
         <div className="card-header">
           <h3 className="card-title">신규 BOM 등록 (완제품 1개당 원재료 소요량)</h3>
@@ -167,8 +196,19 @@ export default function BomPage() {
 
       <div className="card">
         <div className="card-header">
-          <h3 className="card-title">BOM 목록 ({boms.length}건)</h3>
-          <div className="filter-bar">
+          <h3 className="card-title">
+            BOM 목록 ({filteredBoms.length}
+            {filteredBoms.length !== boms.length ? ` / 전체 ${boms.length}` : ''}건)
+          </h3>
+
+          <SearchSortBar
+            search={search}
+            onSearchChange={setSearch}
+            searchPlaceholder="완제품·원재료 코드 또는 이름 검색"
+            sortValue={sortBy}
+            onSortChange={setSortBy}
+            sortOptions={SORT_OPTIONS}
+          >
             <select value={filterFinishedId} onChange={(e) => setFilterFinishedId(e.target.value)}>
               <option value="">전체 완제품</option>
               {finishedItems.map((item) => (
@@ -177,18 +217,22 @@ export default function BomPage() {
                 </option>
               ))}
             </select>
-            <button className="btn btn-secondary btn-sm" onClick={() => loadBoms()} disabled={loading}>
-              새로고침
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={() => loadBoms()}
+              disabled={loading}
+            >
+              <IconRefresh size={14} />
+              <span>새로고침</span>
             </button>
-          </div>
+          </SearchSortBar>
         </div>
 
         {loading ? (
-          <div className="empty-state">BOM 목록을 불러오는 중...</div>
-        ) : boms.length === 0 ? (
-          <div className="empty-state">
-            등록된 BOM이 없습니다. 완제품에 원재료를 연결하면 생산실적 등록 시 원재료가 자동 차감됩니다.
-          </div>
+          <EmptyState loading message="BOM 목록을 불러오는 중..." />
+        ) : filteredBoms.length === 0 ? (
+          <EmptyState message="등록된 BOM이 없습니다. 완제품에 원재료를 연결하면 생산실적 등록 시 원재료가 자동 차감됩니다." />
         ) : (
           <div className="table-wrap">
             <table>
@@ -203,9 +247,9 @@ export default function BomPage() {
                 </tr>
               </thead>
               <tbody>
-                {boms.map((bom) => (
+                {filteredBoms.map((bom) => (
                   <tr key={bom.id}>
-                    <td>{bom.finishedItemCode}</td>
+                    <td style={{ fontWeight: 700 }}>{bom.finishedItemCode}</td>
                     <td style={{ fontWeight: 600 }}>{bom.finishedItemName}</td>
                     <td>{bom.rawMaterialCode}</td>
                     <td>{bom.rawMaterialName}</td>
@@ -216,7 +260,7 @@ export default function BomPage() {
                           min="1"
                           value={editingQty}
                           onChange={(e) => setEditingQty(e.target.value)}
-                          style={{ width: 80, padding: '4px 6px' }}
+                          style={{ width: 90, padding: '6px 8px' }}
                         />
                       ) : (
                         <>
@@ -232,6 +276,7 @@ export default function BomPage() {
                               type="button"
                               className="btn btn-primary btn-sm"
                               onClick={() => handleUpdate(bom.id)}
+                              disabled={submitting}
                             >
                               저장
                             </button>
@@ -258,7 +303,7 @@ export default function BomPage() {
                             <button
                               type="button"
                               className="btn btn-danger btn-sm"
-                              onClick={() => handleDelete(bom)}
+                              onClick={() => setDeletingBom(bom)}
                             >
                               삭제
                             </button>
@@ -273,6 +318,26 @@ export default function BomPage() {
           </div>
         )}
       </div>
+
+      <ConfirmModal
+        open={Boolean(deletingBom)}
+        title="BOM 삭제 확인"
+        message="선택한 BOM 구성을 삭제하시겠습니까?"
+        details={
+          deletingBom
+            ? [
+                `완제품: [${deletingBom.finishedItemCode}] ${deletingBom.finishedItemName}`,
+                `원재료: [${deletingBom.rawMaterialCode}] ${deletingBom.rawMaterialName} (소요량 ${deletingBom.requiredQuantity} ${deletingBom.rawMaterialUnit})`,
+                '삭제 후에는 해당 원재료가 생산실적 등록 시 자동 차감되지 않습니다.',
+              ]
+            : []
+        }
+        confirmLabel="삭제"
+        tone="danger"
+        loading={submitting}
+        onConfirm={() => deletingBom && executeDelete(deletingBom)}
+        onCancel={() => setDeletingBom(null)}
+      />
     </div>
   );
 }
