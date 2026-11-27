@@ -175,7 +175,7 @@ export default function DashboardPage() {
             />
           </section>
 
-          <section className="panel-grid">
+          <section className="dashboard-panels">
             <div className="card">
               <div className="card-header">
                 <h3 className="card-title">
@@ -189,30 +189,33 @@ export default function DashboardPage() {
               {activeOrders.length === 0 ? (
                 <EmptyState message="현재 진행 중이거나 일시정지된 작업지시가 없습니다." />
               ) : (
-                <div className="table-wrap">
-                  <table>
+                <div className="table-wrap dashboard-table-wrap">
+                  <table className="dashboard-table">
                     <thead>
                       <tr>
-                        <th>지시번호</th>
+                        <th className="col-nowrap">지시번호</th>
                         <th>완제품</th>
-                        <th className="text-right">목표/양품</th>
-                        <th>진행률</th>
-                        <th>상태 / 정지 사유</th>
+                        <th className="text-right col-nowrap">양품 / 목표</th>
+                        <th className="col-progress">진행률</th>
+                        <th className="col-nowrap">상태</th>
+                        <th>정지 사유 / 비고</th>
                       </tr>
                     </thead>
                     <tbody>
                       {activeOrders.map((wo) => (
                         <tr key={wo.id} className={wo.status === 'PAUSED' ? 'row-paused' : ''}>
-                          <td style={{ fontWeight: 700 }}>{wo.orderNumber}</td>
-                          <td>
-                            {wo.itemName}{' '}
-                            <span style={{ color: '#64748b' }}>({wo.itemCode})</span>
+                          <td className="col-nowrap" style={{ fontWeight: 700 }}>
+                            {wo.orderNumber}
                           </td>
-                          <td className="text-right">
-                            {formatNumber(wo.producedGoodQuantity)} /{' '}
+                          <td className="col-wrap">
+                            <span style={{ fontWeight: 600 }}>{wo.itemName}</span>
+                            <div className="cell-sub">{wo.itemCode}</div>
+                          </td>
+                          <td className="text-right col-nowrap">
+                            <strong>{formatNumber(wo.producedGoodQuantity)}</strong> /{' '}
                             {formatNumber(wo.targetQuantity)} {wo.unit}
                           </td>
-                          <td>
+                          <td className="col-progress">
                             <div className="progress-wrap">
                               <div className="progress-bar">
                                 <div
@@ -223,16 +226,24 @@ export default function DashboardPage() {
                               <span>{wo.progressRate.toFixed(1)}%</span>
                             </div>
                           </td>
-                          <td>
+                          <td className="col-nowrap">
                             <StatusBadge variant={workOrderStatusVariant(wo.status)}>
                               {wo.status === 'PAUSED' && <IconPause size={11} />}
                               <span>{wo.statusDescription}</span>
                             </StatusBadge>
-                            {wo.status === 'PAUSED' && wo.pauseReason && (
-                              <div className="pause-meta">
-                                {wo.pauseReason}
-                                {wo.pausedAt ? ` · ${formatDateTime(wo.pausedAt)}` : ''}
+                          </td>
+                          <td className="col-wrap">
+                            {wo.status === 'PAUSED' && wo.pauseReason ? (
+                              <div className="pause-meta-inline">
+                                <div className="pause-reason-text">{wo.pauseReason}</div>
+                                {wo.pausedAt && (
+                                  <div className="cell-sub">
+                                    정지 시각: {formatDateTime(wo.pausedAt)}
+                                  </div>
+                                )}
                               </div>
+                            ) : (
+                              <span className="cell-sub">{wo.remark || '정상 진행 중'}</span>
                             )}
                           </td>
                         </tr>
@@ -255,37 +266,47 @@ export default function DashboardPage() {
               {summary.belowSafetyStockItems.length === 0 ? (
                 <EmptyState message="안전재고 미만 품목이 없습니다." />
               ) : (
-                <div className="table-wrap">
-                  <table>
+                <div className="table-wrap dashboard-table-wrap">
+                  <table className="dashboard-table">
                     <thead>
                       <tr>
-                        <th>품목코드</th>
+                        <th className="col-nowrap">품목코드</th>
                         <th>품목명</th>
-                        <th>구분</th>
-                        <th className="text-right">현재고</th>
-                        <th className="text-right">안전재고</th>
-                        <th className="text-right">부족 수량</th>
+                        <th className="col-nowrap">구분</th>
+                        <th className="text-right col-nowrap">현재고</th>
+                        <th className="text-right col-nowrap">안전재고</th>
+                        <th className="text-right col-nowrap">부족 수량</th>
                       </tr>
                     </thead>
                     <tbody>
                       {summary.belowSafetyStockItems.map((inv) => (
                         <tr key={inv.itemId} className="row-warning">
-                          <td style={{ fontWeight: 700 }}>{inv.itemCode}</td>
-                          <td>{inv.itemName}</td>
-                          <td>
+                          <td className="col-nowrap" style={{ fontWeight: 700 }}>
+                            {inv.itemCode}
+                          </td>
+                          <td className="col-wrap" style={{ fontWeight: 600 }}>
+                            {inv.itemName}
+                          </td>
+                          <td className="col-nowrap">
                             <StatusBadge
                               variant={inv.itemType === 'RAW_MATERIAL' ? 'warning' : 'info'}
                             >
                               {inv.itemTypeDescription}
                             </StatusBadge>
                           </td>
-                          <td className="text-right" style={{ fontWeight: 800, color: '#b91c1c' }}>
+                          <td
+                            className="text-right col-nowrap"
+                            style={{ fontWeight: 800, color: '#b91c1c' }}
+                          >
                             {formatNumber(inv.quantity)} {inv.unit}
                           </td>
-                          <td className="text-right">
+                          <td className="text-right col-nowrap">
                             {formatNumber(inv.safetyStock)} {inv.unit}
                           </td>
-                          <td className="text-right" style={{ fontWeight: 800, color: '#b45309' }}>
+                          <td
+                            className="text-right col-nowrap"
+                            style={{ fontWeight: 800, color: '#b45309' }}
+                          >
                             -{formatNumber(inv.safetyStock - inv.quantity)} {inv.unit}
                           </td>
                         </tr>

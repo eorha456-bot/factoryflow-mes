@@ -346,6 +346,56 @@ body {
   gap: 20px;
 }
 
+.dashboard-panels {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.dashboard-table-wrap {
+  overflow-x: visible;
+}
+
+.dashboard-table th,
+.dashboard-table td {
+  vertical-align: middle;
+}
+
+.dashboard-table th.col-nowrap,
+.dashboard-table td.col-nowrap {
+  white-space: nowrap;
+}
+
+.dashboard-table td.col-wrap {
+  white-space: normal;
+  word-break: keep-all;
+  line-height: 1.45;
+}
+
+.dashboard-table .col-progress {
+  width: 160px;
+}
+
+.cell-sub {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.pause-meta-inline {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pause-reason-text {
+  font-size: 13px;
+  font-weight: 700;
+  color: #b45309;
+  line-height: 1.4;
+}
+
 .card {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -1085,5 +1135,11 @@ tr.row-paused td:first-child {
 
   .content {
     padding: 16px;
+  }
+}
+
+@media (max-width: 768px) {
+  .dashboard-table-wrap {
+    overflow-x: auto;
   }
 }
